@@ -1,0 +1,13 @@
+set(CMAKE_C_FLAGS_DEBUG "-g ${CMAKE_C_FLAGS}")
+set(CMAKE_C_FLAGS_RELEASE "-O3 ${CMAKE_C_FLAGS}")
+
+set(CHECKPOINT_ARCH "" CACHE STRING "Target architecture override for libcheckpoint")
+set(TEAPOT_DIFT_LAYOUT "" CACHE STRING "Teapot DIFT layout profile")
+set(TEAPOT_AARCH64_SHADOW_STACK_SIZE "8388608" CACHE STRING "AArch64 fixed-offset shadow stack size")
+set(TEAPOT_AARCH64_SHADOW_STACK_CONTROL_OFFSET "320" CACHE STRING "AArch64 control shadow stack slot offset")
+
+option(TEAPOT_ENABLE_DIFT_RUNTIME "Enable libcheckpoint DIFT shadow initialization" ON)
+option(TEAPOT_ENABLE_RISCV_FLOAT_STATE "Save and restore RISC-V floating-point registers" OFF)
+option(TEAPOT_BUILD_NESTED_RUNTIME "Build the nested-speculation checkpoint_nested runtime target" OFF)
+option(TEAPOT_BUILD_DIFT_MATH_WRAPPERS "Build optional DIFT wrappers for libm functions" OFF)
+option(TEAPOT_BUILD_DIFT_ZLIB_WRAPPERS "Build optional DIFT wrappers for zlib functions" OFF)
