@@ -143,7 +143,13 @@ extern dift_tag_t dift_reg_queued_tags[DIFT_REG_TAGS_SIZE];
 # error "DIFT_XOR_MASK must be defined by the selected Teapot DIFT layout"
 #endif
 
-#define DIFT_MEM_ADDR(addr) ((dift_tag_t*)((uintptr_t)(addr) ^ (uintptr_t)DIFT_XOR_MASK))
+#if defined(__aarch64__)
+# define DIFT_APP_ADDR(addr) ((uintptr_t)(addr) & 0x00ffffffffffffffULL)
+#else
+# define DIFT_APP_ADDR(addr) ((uintptr_t)(addr))
+#endif
+
+#define DIFT_MEM_ADDR(addr) ((dift_tag_t*)(DIFT_APP_ADDR(addr) ^ (uintptr_t)DIFT_XOR_MASK))
 #define DIFT_MEM_TAG(addr) (*(DIFT_MEM_ADDR(addr)))
 
 void map_dift_pages();

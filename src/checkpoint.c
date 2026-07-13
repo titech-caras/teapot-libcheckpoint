@@ -6,8 +6,36 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <stddef.h>
+#include <errno.h>
+#include <string.h>
 #include <sys/mman.h>
+#include <sys/auxv.h>
+#include <sys/prctl.h>
 #include <unistd.h>
+
+#if defined(__aarch64__) && defined(TEAPOT_AARCH64_MTE_TAG_STORAGE)
+#ifndef PROT_MTE
+#define PROT_MTE 0x20
+#endif
+#ifndef HWCAP2_MTE
+#define HWCAP2_MTE (1UL << 18)
+#endif
+#ifndef PR_SET_TAGGED_ADDR_CTRL
+#define PR_SET_TAGGED_ADDR_CTRL 55
+#endif
+#ifndef PR_TAGGED_ADDR_ENABLE
+#define PR_TAGGED_ADDR_ENABLE (1UL << 0)
+#endif
+#ifndef PR_MTE_TCF_NONE
+#define PR_MTE_TCF_NONE 0UL
+#endif
+#ifndef PR_MTE_TAG_SHIFT
+#define PR_MTE_TAG_SHIFT 3
+#endif
+#ifndef PR_MTE_TAG_MASK
+#define PR_MTE_TAG_MASK (0xffffUL << PR_MTE_TAG_SHIFT)
+#endif
+#endif
 
 #if defined(__GNUC__) && !defined(__clang__) && \
         (defined(__aarch64__) || (defined(__riscv) && __riscv_xlen == 64))
@@ -44,6 +72,10 @@ volatile bool in_restore_memlog LIBCHECKPOINT_PROTECTED_SECTION = false;
 
 __attribute__((weak)) void __asan_init(void);
 __attribute__((weak)) void __asan_poison_memory_region(void const volatile *addr, size_t size);
+
+#if defined(__aarch64__) && defined(TEAPOT_AARCH64_MTE_TAG_STORAGE)
+static inline void mte_store_tag(uintptr_t addr, uint8_t tag);
+#endif
 
 #ifdef COVERAGE
 __attribute__((weak)) void hfuzz_trace_pc(uint64_t pc) {
@@ -82,17 +114,116 @@ static uint64_t checkpoint_read_timer() {
 }
 
 void poison_protected_zone() {
+    uintptr_t protected_start = (uintptr_t)__start_teapot_protected;
+    uintptr_t protected_end = (uintptr_t)__stop_teapot_protected;
+    if (protected_end <= protected_start) {
+        return;
+    }
+
+#if defined(__aarch64__) && defined(TEAPOT_AARCH64_MTE_TAG_STORAGE)
+    uintptr_t aligned_start = protected_start & ~(uintptr_t)0xf;
+    for (uintptr_t addr = aligned_start; addr < protected_end; addr += 16) {
+        mte_store_tag(addr, 0xf);
+    }
+#else
     if (!__asan_poison_memory_region) {
         fputs("Teapot instrumented binaries must provide __asan_poison_memory_region\n", stderr);
         abort();
     }
 
-    uintptr_t protected_start = (uintptr_t)__start_teapot_protected;
-    uintptr_t protected_end = (uintptr_t)__stop_teapot_protected;
-    if (protected_end > protected_start) {
-        __asan_poison_memory_region((void *)protected_start, protected_end - protected_start);
-    }
+    __asan_poison_memory_region((void *)protected_start, protected_end - protected_start);
+#endif
 }
+
+#if defined(__aarch64__) && defined(TEAPOT_AARCH64_MTE_TAG_STORAGE)
+static inline void mte_store_tag(uintptr_t addr, uint8_t tag) {
+    uintptr_t aligned = DIFT_APP_ADDR(addr) & ~(uintptr_t)0xf;
+    uintptr_t tagged = aligned | ((uintptr_t)(tag & 0xf) << 56);
+    asm volatile("stg %0, [%1]" :: "r"(tagged), "r"(aligned) : "memory");
+}
+
+static int maps_protection_from_perms(const char *perms) {
+    int prot = 0;
+    if (perms[0] == 'r')
+        prot |= PROT_READ;
+    if (perms[1] == 'w')
+        prot |= PROT_WRITE;
+    if (perms[2] == 'x')
+        prot |= PROT_EXEC;
+    return prot;
+}
+
+static void enable_mte_for_mapped_app_overlap(uintptr_t app_start, uintptr_t app_end) {
+    FILE *maps = fopen("/proc/self/maps", "r");
+    if (maps == NULL) {
+        perror("open /proc/self/maps for MTE setup");
+        abort();
+    }
+
+    char line[512];
+    while (fgets(line, sizeof(line), maps) != NULL) {
+        unsigned long long range_start;
+        unsigned long long range_end;
+        char perms[5] = {0};
+        if (sscanf(line, "%llx-%llx %4s", &range_start, &range_end, perms) != 3)
+            continue;
+        if (perms[1] != 'w')
+            continue;
+
+        uintptr_t start = (uintptr_t)range_start;
+        uintptr_t end = (uintptr_t)range_end;
+        if (end <= app_start || start >= app_end)
+            continue;
+        if (start < app_start)
+            start = app_start;
+        if (end > app_end)
+            end = app_end;
+        if (start >= end)
+            continue;
+
+        int prot = maps_protection_from_perms(perms) | PROT_MTE;
+        if (mprotect((void *)start, end - start, prot) != 0) {
+            fprintf(stderr, "mprotect(PROT_MTE) 0x%llx-0x%llx failed: %s\n",
+                    (unsigned long long)start,
+                    (unsigned long long)end,
+                    strerror(errno));
+            abort();
+        }
+    }
+
+    fclose(maps);
+}
+
+static void initialize_aarch64_mte_tag_storage() {
+    if (!(getauxval(AT_HWCAP2) & HWCAP2_MTE)) {
+        fputs("TEAPOT_AARCH64_MTE_TAG_STORAGE requires AArch64 MTE support\n", stderr);
+        abort();
+    }
+
+    unsigned long ctrl = PR_TAGGED_ADDR_ENABLE | PR_MTE_TCF_NONE | PR_MTE_TAG_MASK;
+    if (prctl(PR_SET_TAGGED_ADDR_CTRL, ctrl, 0, 0, 0) != 0) {
+        fprintf(stderr, "prctl(PR_SET_TAGGED_ADDR_CTRL, MTE no-fault mode) failed: %s\n",
+                strerror(errno));
+        abort();
+    }
+
+#ifdef DIFT_APP_RANGE0_START
+    enable_mte_for_mapped_app_overlap(DIFT_APP_RANGE0_START, DIFT_APP_RANGE0_END);
+#endif
+#ifdef DIFT_APP_RANGE1_START
+    enable_mte_for_mapped_app_overlap(DIFT_APP_RANGE1_START, DIFT_APP_RANGE1_END);
+#endif
+#ifdef DIFT_APP_RANGE2_START
+    enable_mte_for_mapped_app_overlap(DIFT_APP_RANGE2_START, DIFT_APP_RANGE2_END);
+#endif
+#ifdef DIFT_APP_RANGE3_START
+    enable_mte_for_mapped_app_overlap(DIFT_APP_RANGE3_START, DIFT_APP_RANGE3_END);
+#endif
+#ifdef DIFT_APP_RANGE4_START
+    enable_mte_for_mapped_app_overlap(DIFT_APP_RANGE4_START, DIFT_APP_RANGE4_END);
+#endif
+}
+#endif
 
 static void initialize_first_spill_state() {
 #if defined(__riscv) && __riscv_xlen == 64
@@ -159,6 +290,10 @@ static void initialize_shadow_stack_state() {
 }
 
 static bool memory_history_entry_is_valid(const memory_history_t *entry) {
+#if defined(__aarch64__) && defined(TEAPOT_AARCH64_MTE_TAG_STORAGE)
+    if (entry->size == MEM_HISTORY_MTE_TAG_SIZE)
+        return true;
+#endif
     return entry->size > 0 && entry->size <= sizeof(entry->data);
 }
 
@@ -223,10 +358,14 @@ static void libcheckpoint_prepare_runtime(int argc, char **argv) {
     if (libcheckpoint_runtime_initialized)
         return;
 
+#if defined(__aarch64__) && defined(TEAPOT_AARCH64_MTE_TAG_STORAGE)
+    initialize_aarch64_mte_tag_storage();
+#else
     if (!__asan_init) {
         fputs("Teapot instrumented binaries must be linked with AddressSanitizer\n", stderr);
         abort();
     }
+#endif
 
 #ifdef COVERAGE
     if (__sanitizer_cov_trace_pc_guard_init) {
@@ -339,6 +478,14 @@ LIBCHECKPOINT_RESTORE_PATH void restore_checkpoint_memlog() {
     while (memory_history_top > checkpoint_metadata[checkpoint_cnt].memory_history_top) {
         // This may fail if the address is only readable. SIGSEGV handler detects this and the entry will be skipped.
         memory_history_top--;
+#if defined(__aarch64__) && defined(TEAPOT_AARCH64_MTE_TAG_STORAGE)
+        if (memory_history_top->size == MEM_HISTORY_MTE_TAG_SIZE) {
+            mte_store_tag((uintptr_t)memory_history_top->addr,
+                    (uint8_t)memory_history_top->data);
+            memory_history_top->size = 0;
+            continue;
+        }
+#endif
         volatile uint8_t *dst = (volatile uint8_t *)memory_history_top->addr;
         const uint8_t *src = (const uint8_t *)&memory_history_top->data;
         size_t size = memory_history_top->size;

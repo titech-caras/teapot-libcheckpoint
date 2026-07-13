@@ -3,6 +3,7 @@ set(CMAKE_C_FLAGS_RELEASE "-O3 ${CMAKE_C_FLAGS}")
 
 set(CHECKPOINT_ARCH "" CACHE STRING "Target architecture override for libcheckpoint")
 set(TEAPOT_DIFT_LAYOUT "" CACHE STRING "Teapot DIFT layout profile")
+set(TEAPOT_AARCH64_TAG_STORAGE "shadow" CACHE STRING "AArch64 Teapot ASan-style tag storage backend: shadow or mte")
 set(TEAPOT_AARCH64_SHADOW_STACK_SIZE "8388608" CACHE STRING "AArch64 fixed-offset shadow stack size")
 set(TEAPOT_AARCH64_SHADOW_STACK_CONTROL_OFFSET "320" CACHE STRING "AArch64 control shadow stack slot offset")
 

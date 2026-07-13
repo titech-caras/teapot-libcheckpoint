@@ -7,6 +7,14 @@ set(TEAPOT_ARCH_RUNTIME_DEFS)
 if(TEAPOT_ENABLE_RISCV_FLOAT_STATE)
     list(APPEND TEAPOT_ARCH_RUNTIME_DEFS ENABLE_RISCV_FLOAT_STATE)
 endif()
+if(TEAPOT_AARCH64_TAG_STORAGE STREQUAL "mte")
+    if(NOT CHECKPOINT_ARCH_NAME STREQUAL "aarch64")
+        message(FATAL_ERROR "TEAPOT_AARCH64_TAG_STORAGE=mte is only valid for AArch64")
+    endif()
+    list(APPEND TEAPOT_ARCH_RUNTIME_DEFS TEAPOT_AARCH64_MTE_TAG_STORAGE)
+elseif(NOT TEAPOT_AARCH64_TAG_STORAGE STREQUAL "shadow")
+    message(FATAL_ERROR "Unsupported TEAPOT_AARCH64_TAG_STORAGE=${TEAPOT_AARCH64_TAG_STORAGE}")
+endif()
 
 set(CHECKPOINT_RUNTIME_SOURCES
     src/checkpoint.c
@@ -31,6 +39,9 @@ function(teapot_configure_checkpoint_target target)
         ${TEAPOT_DIFT_RUNTIME_DEFS}
         ${TEAPOT_ARCH_RUNTIME_DEFS}
         ${DIFT_RANGE_DEFS})
+    if(TEAPOT_AARCH64_TAG_STORAGE STREQUAL "mte")
+        target_compile_options(${target} PRIVATE -march=armv8.5-a+memtag)
+    endif()
 endfunction()
 
 add_library(checkpoint ${CHECKPOINT_RUNTIME_SOURCES})
