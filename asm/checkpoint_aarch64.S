@@ -4,9 +4,13 @@
 // (IP0), so the architecture-specific instrumentation must reserve it there.
 #define AARCH64_FRAME_SIZE 64
 #define AARCH64_REPORT_STATE_OFFSET (SCRATCHPAD_SIZE - 512)
+#define AARCH64_REPORT_SIMD_STATE_OFFSET (SCRATCHPAD_SIZE - 1040)
 #define AARCH64_REPORT_CALL_STACK_OFFSET (SCRATCHPAD_SIZE - 4096)
 #ifndef AARCH64_SHADOW_STACK_CONTROL_OFFSET
 #define AARCH64_SHADOW_STACK_CONTROL_OFFSET 320
+#endif
+#ifndef AARCH64_SHADOW_STACK_REPORT_OFFSET
+#define AARCH64_SHADOW_STACK_REPORT_OFFSET 416
 #endif
 
 .macro LOAD_ADDR reg, sym
@@ -40,6 +44,10 @@
 	stp	q26, q27, [\base, #416]
 	stp	q28, q29, [\base, #448]
 	stp	q30, q31, [\base, #480]
+	mrs	x17, fpsr
+	str	x17, [\base, #512]
+	mrs	x17, fpcr
+	str	x17, [\base, #520]
 #endif
 .endm
 
@@ -61,6 +69,10 @@
 	ldp	q26, q27, [\base, #416]
 	ldp	q28, q29, [\base, #448]
 	ldp	q30, q31, [\base, #480]
+	ldr	x17, [\base, #512]
+	msr	fpsr, x17
+	ldr	x17, [\base, #520]
+	msr	fpcr, x17
 #endif
 .endm
 
@@ -103,6 +115,20 @@
 	str	x0, [\ckpt, #CKPT_AARCH64_SP]
 	ldr	x0, [sp, #48]
 	str	x0, [\ckpt, #CKPT_AARCH64_NZCV]
+.endm
+
+.macro FIXUP_CHECKPOINT_FIXED_REGS ckpt
+	LOAD_ADDR x0, checkpoint_target_metadata + CHECKPOINT_TARGET_FIXED_REG0_SOURCE
+	ldr	x1, [x0]
+	tbnz	x1, #63, 1f
+	ldr	x1, [\ckpt, x1]
+	str	x1, [\ckpt, #CKPT_AARCH64_X16]
+1:
+	ldr	x1, [x0, #(CHECKPOINT_TARGET_FIXED_REG1_SOURCE - CHECKPOINT_TARGET_FIXED_REG0_SOURCE)]
+	tbnz	x1, #63, 2f
+	ldr	x1, [\ckpt, x1]
+	str	x1, [\ckpt, #CKPT_AARCH64_X17]
+2:
 .endm
 
 .macro COPY_DIFT_TAGS ckpt
@@ -222,7 +248,13 @@ DEF_RESTORE_CHECKPOINT MALFORMED_INDIRECT_BR, ROLLBACK_MALFORMED_INDIRECT_BR
 	.type	report_gadget_aarch64_preserve_\type,%function
 report_gadget_aarch64_preserve_\type:
 	.cfi_startproc
+	sub	sp, sp, #2048, lsl #12
+	stp	x16, x17, [sp, #AARCH64_SHADOW_STACK_REPORT_OFFSET]
 	LOAD_ADDR x16, scratchpad + AARCH64_REPORT_STATE_OFFSET
+	ldr	x17, [sp, #AARCH64_SHADOW_STACK_REPORT_OFFSET]
+	str	x17, [x16, #200]
+	ldr	x17, [sp, #(AARCH64_SHADOW_STACK_REPORT_OFFSET + 8)]
+	add	sp, sp, #2048, lsl #12
 	stp	x0, x1, [x16, #32]
 	stp	x2, x3, [x16, #48]
 	stp	x4, x5, [x16, #64]
@@ -237,7 +269,10 @@ report_gadget_aarch64_preserve_\type:
 	str	x17, [x16, #184]
 	mrs	x17, nzcv
 	str	x17, [x16, #192]
+	LOAD_ADDR x16, scratchpad + AARCH64_REPORT_SIMD_STATE_OFFSET
+	SAVE_SIMD_STATE x16
 
+	LOAD_ADDR x16, scratchpad + AARCH64_REPORT_STATE_OFFSET
 	ldr	x0, [x16, #0]
 	ldr	x1, [x16, #8]
 	ldr	x2, [x16, #16]
@@ -250,6 +285,9 @@ report_gadget_aarch64_preserve_\type:
 	msr	nzcv, x17
 	ldr	x17, [x16, #184]
 	mov	sp, x17
+	LOAD_ADDR x16, scratchpad + AARCH64_REPORT_SIMD_STATE_OFFSET
+	RESTORE_SIMD_STATE x16
+	LOAD_ADDR x16, scratchpad + AARCH64_REPORT_STATE_OFFSET
 	ldr	x30, [x16, #176]
 	ldp	x17, x18, [x16, #160]
 	ldp	x14, x15, [x16, #144]
@@ -260,6 +298,7 @@ report_gadget_aarch64_preserve_\type:
 	ldp	x4, x5, [x16, #64]
 	ldp	x2, x3, [x16, #48]
 	ldp	x0, x1, [x16, #32]
+	ldr	x16, [x16, #200]
 	ret
 .Lreport_gadget_aarch64_preserve_\type\()_end:
 	.size	report_gadget_aarch64_preserve_\type, .Lreport_gadget_aarch64_preserve_\type\()_end-report_gadget_aarch64_preserve_\type
@@ -341,6 +380,7 @@ make_checkpoint_aarch64:
 	LOAD_ADDR x19, checkpoint_metadata
 	add	x19, x19, x0, lsl #CHECKPOINT_METADATA_SHIFT
 	STORE_REGS_TO_CHECKPOINT x19
+	FIXUP_CHECKPOINT_FIXED_REGS x19
 
 #ifdef TIME
 	READ_TIMER_STAT x1, x2, x3

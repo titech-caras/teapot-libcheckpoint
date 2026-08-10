@@ -165,6 +165,22 @@
 	sd	t0, CKPT_RISCV_X31(\ckpt)
 .endm
 
+.macro FIXUP_CHECKPOINT_FIXED_REGS ckpt
+	LOAD_ADDR_OFFSET t0, checkpoint_target_metadata, CHECKPOINT_TARGET_FIXED_REG0_SOURCE
+	ld	t1, 0(t0)
+	bltz	t1, 1f
+	add	t1, \ckpt, t1
+	ld	t1, 0(t1)
+	sd	t1, CKPT_RISCV_X5(\ckpt)
+1:
+	ld	t1, CHECKPOINT_TARGET_FIXED_REG1_SOURCE - CHECKPOINT_TARGET_FIXED_REG0_SOURCE(t0)
+	bltz	t1, 2f
+	add	t1, \ckpt, t1
+	ld	t1, 0(t1)
+	sd	t1, CKPT_RISCV_X6(\ckpt)
+2:
+.endm
+
 .macro COPY_DIFT_TAGS ckpt
 #ifdef ENABLE_DIFT
 	LOAD_ADDR t1, dift_reg_tags
@@ -404,6 +420,7 @@ make_checkpoint_riscv64:
 	slli	t1, t2, CHECKPOINT_METADATA_SHIFT
 	add	s0, t0, t1
 	STORE_REGS_TO_CHECKPOINT s0
+	FIXUP_CHECKPOINT_FIXED_REGS s0
 	COPY_DIFT_TAGS s0
 
 	LOAD_ADDR_OFFSET t0, checkpoint_target_metadata, CHECKPOINT_TARGET_RETURN_ADDR

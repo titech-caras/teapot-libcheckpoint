@@ -83,6 +83,13 @@ RV64 does not assume floating-point registers are available.  Build with
 `-DTEAPOT_ENABLE_RISCV_FLOAT_STATE=ON` only for targets that provide the
 floating-point state Teapot should checkpoint.
 
+AArch64 and RV64 checkpoint sites reserve `x16`/`x17` and `t0`/`t1`,
+respectively.  Teapot keeps their values in up to two LRA-selected spare
+registers and first-spills only the remainder.  The runtime uses the source
+offsets in `checkpoint_target_metadata` to repair the canonical checkpoint
+slots, so Teapot and libcheckpoint revisions must keep this entry convention
+in sync.
+
 For RISC-V Sv39 qemu user-mode smoke tests, reserve the low user virtual address
 space:
 

@@ -233,12 +233,6 @@ static void initialize_first_spill_state() {
 #endif
 }
 
-#if defined(__riscv) && __riscv_xlen == 64
-__attribute__((constructor(101))) static void initialize_first_spill_state_early() {
-    initialize_first_spill_state();
-}
-#endif
-
 static void initialize_shadow_stack_state() {
 #if defined(__aarch64__)
 #ifndef AARCH64_SHADOW_STACK_SIZE
@@ -288,6 +282,20 @@ static void initialize_shadow_stack_state() {
     }
 #endif
 }
+
+static void initialize_instrumentation_state_early() {
+    initialize_first_spill_state();
+    initialize_shadow_stack_state();
+#ifndef DISABLE_DIFT_RUNTIME
+    map_dift_pages();
+#endif
+}
+
+typedef void (*preinit_function_t)(void);
+
+__attribute__((used, section(".preinit_array")))
+static preinit_function_t const instrumentation_state_preinit =
+    initialize_instrumentation_state_early;
 
 static bool memory_history_entry_is_valid(const memory_history_t *entry) {
 #if defined(__aarch64__) && defined(TEAPOT_AARCH64_MTE_TAG_STORAGE)
