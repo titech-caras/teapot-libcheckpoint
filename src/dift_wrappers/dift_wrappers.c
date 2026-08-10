@@ -144,7 +144,11 @@ DIFT_WRAPPER(__strncat_chk, char*, char *dest, const char *src, size_t n, size_t
 }
 
 DIFT_WRAPPER(strncpy, char*, char *dest, const char *src, size_t num) {
-    dift_copy_mem_tags(dest, src, num);
+    size_t copy_len = strnlen(src, num);
+    dift_copy_mem_tags(dest, src, copy_len);
+    if (copy_len < num) {
+        dift_set_mem_tags(dest + copy_len, 0, num - copy_len);
+    }
     dift_reg_tags[DIFT_RET] = dift_reg_tags[DIFT_ARG0];
     return strncpy(dest, src, num);
 }
