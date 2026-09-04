@@ -13,6 +13,10 @@
 #include <sys/prctl.h>
 #include <unistd.h>
 
+#if defined(__x86_64__)
+#include <cpuid.h>
+#endif
+
 #if defined(__aarch64__) && defined(TEAPOT_AARCH64_MTE_TAG_STORAGE)
 #ifndef PROT_MTE
 #define PROT_MTE 0x20
@@ -49,6 +53,16 @@ extern char __stop_teapot_protected[];
 
 checkpoint_metadata_t checkpoint_metadata[MAX_CHECKPOINTS] LIBCHECKPOINT_PROTECTED_SECTION;
 xsave_area_t processor_extended_states[MAX_CHECKPOINTS] LIBCHECKPOINT_PROTECTED_SECTION;
+
+#if defined(__x86_64__)
+uint64_t processor_xsave_mask LIBCHECKPOINT_PROTECTED_SECTION = 0;
+/*
+ * Report calls cannot borrow scratchpad storage for XSAVE: the scratchpad is
+ * also a C stack, while XRSTOR requires a 64-byte-aligned image whose reserved
+ * header bytes remain zero. Static storage supplies both invariants.
+ */
+xsave_area_t report_extended_state LIBCHECKPOINT_PROTECTED_SECTION;
+#endif
 
 memory_history_t memory_history[MEM_HISTORY_LEN] LIBCHECKPOINT_PROTECTED_SECTION;
 memory_history_t *memory_history_top LIBCHECKPOINT_PROTECTED_SECTION = &memory_history[0];
@@ -112,6 +126,55 @@ static uint64_t checkpoint_read_timer() {
 #error "Unsupported libcheckpoint timer architecture"
 #endif
 }
+
+#if defined(__x86_64__)
+/*
+ * Preserve all user vector components that a compiler or hand-written crypto
+ * routine can keep live across an inserted checkpoint/report call.  Requesting
+ * only the vector-related XCR0 components avoids unrelated large state such as
+ * future tile registers while still covering x87, XMM, YMM, opmask, and ZMM.
+ */
+static void initialize_x64_extended_state() {
+    unsigned int eax, ebx, ecx, edx;
+    const uint64_t vector_components =
+        (1ULL << 0) | (1ULL << 1) | (1ULL << 2) |
+        (1ULL << 5) | (1ULL << 6) | (1ULL << 7);
+
+    if (!__get_cpuid(1, &eax, &ebx, &ecx, &edx) ||
+            (ecx & bit_XSAVE) == 0 || (ecx & bit_OSXSAVE) == 0) {
+        processor_xsave_mask = 0;
+        return;
+    }
+
+    uint32_t xcr0_lo;
+    uint32_t xcr0_hi;
+    asm volatile("xgetbv" : "=a"(xcr0_lo), "=d"(xcr0_hi) : "c"(0));
+    uint64_t mask = (((uint64_t)xcr0_hi << 32) | xcr0_lo) & vector_components;
+
+    /* x87 and SSE form the mandatory legacy region of an XSAVE image. */
+    if ((mask & 0x3) != 0x3) {
+        processor_xsave_mask = 0;
+        return;
+    }
+
+    size_t required_size = 576; /* 512-byte legacy region + 64-byte header. */
+    for (unsigned int component = 2; component <= 7; component++) {
+        if ((mask & (1ULL << component)) == 0)
+            continue;
+        __cpuid_count(0x0d, component, eax, ebx, ecx, edx);
+        size_t component_end = (size_t)ebx + (size_t)eax;
+        if (component_end > required_size)
+            required_size = component_end;
+    }
+
+    if (required_size > PROCESSOR_EXTENDED_STATE_SIZE) {
+        fputs("Enabled x86 vector state exceeds the checkpoint save area\n", stderr);
+        abort();
+    }
+
+    processor_xsave_mask = mask;
+}
+#endif
 
 void poison_protected_zone() {
     uintptr_t protected_start = (uintptr_t)__start_teapot_protected;
@@ -365,6 +428,10 @@ void print_statistics() {
 static void libcheckpoint_prepare_runtime(int argc, char **argv) {
     if (libcheckpoint_runtime_initialized)
         return;
+
+#if defined(__x86_64__)
+    initialize_x64_extended_state();
+#endif
 
 #if defined(__aarch64__) && defined(TEAPOT_AARCH64_MTE_TAG_STORAGE)
     initialize_aarch64_mte_tag_storage();

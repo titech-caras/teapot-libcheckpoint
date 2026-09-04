@@ -33,6 +33,14 @@
 .endm
 
 .macro SAVE_SIMD_STATE base
+	movq	processor_xsave_mask, %rax
+	testq	%rax, %rax
+	jz	.Lsave_xmm_only\@
+	movq	%rax, %rdx
+	shrq	$32, %rdx
+	xsave64	(\base)
+	jmp	.Lsave_simd_done\@
+.Lsave_xmm_only\@:
 	movl	$0xFFFFFFFF, %eax
 	movl	$0xFFFFFFFF, %edx
 	movaps	%xmm0, (\base)
@@ -43,9 +51,26 @@
 	movaps	%xmm5, 80(\base)
 	movaps	%xmm6, 96(\base)
 	movaps	%xmm7, 112(\base)
+	movaps	%xmm8, 128(\base)
+	movaps	%xmm9, 144(\base)
+	movaps	%xmm10, 160(\base)
+	movaps	%xmm11, 176(\base)
+	movaps	%xmm12, 192(\base)
+	movaps	%xmm13, 208(\base)
+	movaps	%xmm14, 224(\base)
+	movaps	%xmm15, 240(\base)
+.Lsave_simd_done\@:
 .endm
 
 .macro RESTORE_SIMD_STATE base
+	movq	processor_xsave_mask, %rax
+	testq	%rax, %rax
+	jz	.Lrestore_xmm_only\@
+	movq	%rax, %rdx
+	shrq	$32, %rdx
+	xrstor64	(\base)
+	jmp	.Lrestore_simd_done\@
+.Lrestore_xmm_only\@:
 	movl	$0xFFFFFFFF, %eax
 	movl	$0xFFFFFFFF, %edx
 	movaps	(\base), %xmm0
@@ -56,7 +81,27 @@
 	movaps	80(\base), %xmm5
 	movaps	96(\base), %xmm6
 	movaps	112(\base), %xmm7
+	movaps	128(\base), %xmm8
+	movaps	144(\base), %xmm9
+	movaps	160(\base), %xmm10
+	movaps	176(\base), %xmm11
+	movaps	192(\base), %xmm12
+	movaps	208(\base), %xmm13
+	movaps	224(\base), %xmm14
+	movaps	240(\base), %xmm15
+.Lrestore_simd_done\@:
 .endm
+
+/*
+ * Gadget reports are ordinary C calls and may overwrite every caller-saved
+ * SIMD register.  Report sites can be inserted between an assembly load and a
+ * later use of the loaded vector, so preserve the complete x86-64 XMM register
+ * file around the call.  The XSAVE image has dedicated 64-byte-aligned storage
+ * whose reserved header bytes remain zero; the scratchpad is still used only
+ * for the report call stack and the tag spill.
+ */
+#define X64_REPORT_CALL_STACK_OFFSET (SCRATCHPAD_SIZE - 32768)
+#define X64_REPORT_TAG_OFFSET (SCRATCHPAD_SIZE - 64)
 
 .macro COPY_DIFT_TAGS ckpt
 #ifdef ENABLE_DIFT
@@ -166,6 +211,40 @@ DEF_RESTORE_CHECKPOINT SIGSEGV, ROLLBACK_SIGSEGV
 DEF_RESTORE_CHECKPOINT EXT_LIB, ROLLBACK_EXT_LIB
 DEF_RESTORE_CHECKPOINT MALFORMED_INDIRECT_BR, ROLLBACK_MALFORMED_INDIRECT_BR
 
+.macro DEF_REPORT_GADGET_X64_PRESERVE type
+	.globl	report_gadget_\type
+	.p2align	4, 0x90
+	.type	report_gadget_\type,@function
+report_gadget_\type:
+	.cfi_startproc
+	pushq	%rbx
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbx, -16
+	movq	%rsp, %rbx
+	.cfi_def_cfa_register %rbx
+	movq	%rdx, scratchpad+X64_REPORT_TAG_OFFSET
+	leaq	report_extended_state(%rip), %r10
+	SAVE_SIMD_STATE %r10
+	movq	scratchpad+X64_REPORT_TAG_OFFSET, %rdx
+	leaq	scratchpad+X64_REPORT_CALL_STACK_OFFSET, %rsp
+	callq	report_gadget_x64_impl_\type
+	leaq	report_extended_state(%rip), %r10
+	RESTORE_SIMD_STATE %r10
+	movq	%rbx, %rsp
+	.cfi_def_cfa_register %rsp
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	.cfi_restore %rbx
+	retq
+.Lreport_gadget_\type\()_end:
+	.size	report_gadget_\type, .Lreport_gadget_\type\()_end-report_gadget_\type
+	.cfi_endproc
+.endm
+
+DEF_REPORT_GADGET_X64_PRESERVE KASPER_CACHE
+DEF_REPORT_GADGET_X64_PRESERVE KASPER_MDS
+DEF_REPORT_GADGET_X64_PRESERVE KASPER_PORT
+
 	.globl	make_checkpoint_x64
 	.p2align	4, 0x90
 	.type	make_checkpoint_x64,@function
@@ -241,6 +320,19 @@ make_checkpoint_x64:
 	movq	checkpoint_target_metadata+8, %rdi
 	movq	%rax, %rbx
 	callq	hfuzz_trace_pc
+	/*
+	 * The coverage hook is an ordinary ABI call and may clobber every
+	 * caller-saved SIMD register.  The snapshot above is also the state that
+	 * must remain live on the normal checkpoint path, not just on rollback.
+	 * Recompute its slot before restoring the saved GPRs; those restores undo
+	 * the scratch-register clobbers made here.
+	 */
+	leaq	processor_extended_states, %r10
+	movq	checkpoint_cnt, %r11
+	decq	%r11
+	shlq	$PROCESSOR_EXTENDED_STATE_SHIFT, %r11
+	addq	%r11, %r10
+	RESTORE_SIMD_STATE %r10
 	movq	%rbx, %rax
 	RESTORE_COVERAGE_CLOBBERS_FROM_CHECKPOINT %rax
 .Lno_normal_coverage:

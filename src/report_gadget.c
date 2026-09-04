@@ -137,6 +137,24 @@ void report_gadget(const char * gadget_desc, int gadget_type, uint64_t gadget_ad
 #endif
 }
 
+#if defined(__x86_64__)
+/*
+ * The x86-64 entry points are assembly wrappers that preserve the SIMD
+ * register file before entering this C implementation.  A normal C call may
+ * overwrite every XMM register, while report sites can occur in the middle of
+ * hand-written assembly that keeps values live in those registers.
+ */
+#define DEF_REPORT_GADGET(TYPE) \
+    void report_gadget_x64_impl_##TYPE(uint64_t gadget_addr, uint64_t access_addr, dift_tag_t tag) { \
+        preserve_report_scratch_registers(); \
+        report_gadget(STR(TYPE), GADGET_##TYPE, gadget_addr, access_addr, tag); \
+        restore_report_scratch_registers(); \
+    }
+
+DEF_REPORT_GADGET(KASPER_CACHE);
+DEF_REPORT_GADGET(KASPER_MDS);
+DEF_REPORT_GADGET(KASPER_PORT);
+#else
 #define DEF_REPORT_GADGET(TYPE) \
     void report_gadget_##TYPE(uint64_t gadget_addr, uint64_t access_addr, dift_tag_t tag) { \
         preserve_report_scratch_registers(); \
@@ -147,5 +165,6 @@ void report_gadget(const char * gadget_desc, int gadget_type, uint64_t gadget_ad
 LIBCHECKPOINT_PRESERVE_MOST DEF_REPORT_GADGET(KASPER_CACHE);
 LIBCHECKPOINT_PRESERVE_MOST DEF_REPORT_GADGET(KASPER_MDS);
 LIBCHECKPOINT_PRESERVE_MOST DEF_REPORT_GADGET(KASPER_PORT);
+#endif
 
 #undef DEF_REPORT_GADGET

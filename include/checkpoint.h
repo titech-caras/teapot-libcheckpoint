@@ -48,8 +48,13 @@
 #define CHECKPOINT_TARGET_FIXED_REG1_SOURCE 40
 #define CHECKPOINT_TARGET_METADATA_SIZE 48
 
-#define PROCESSOR_EXTENDED_STATE_SIZE 2048
-#define PROCESSOR_EXTENDED_STATE_SHIFT 11
+/*
+ * The standard XSAVE layout needs 2432 bytes when AVX-512 state is enabled
+ * (through Hi16_ZMM).  Keep each checkpoint slot naturally aligned and leave
+ * room for the complete x87/SSE/AVX/AVX-512 user-vector state.
+ */
+#define PROCESSOR_EXTENDED_STATE_SIZE 4096
+#define PROCESSOR_EXTENDED_STATE_SHIFT 12
 
 #if defined(__x86_64__)
 #define CHECKPOINT_METADATA_SIZE 256
@@ -255,6 +260,13 @@ extern bool libcheckpoint_enabled;
 
 extern volatile bool in_restore_memlog;
 
+#if defined(__x86_64__)
+/* Zero selects the legacy XMM-only fallback on machines without OSXSAVE. */
+extern uint64_t processor_xsave_mask;
+/* Dedicated report-call XSAVE image; never reused as the scratch call stack. */
+extern xsave_area_t report_extended_state;
+#endif
+
 LIBCHECKPOINT_PRESERVE_MOST void libcheckpoint_enable(int argc, char **argv);
 LIBCHECKPOINT_PRESERVE_MOST void libcheckpoint_disable();
 
@@ -295,5 +307,7 @@ _Static_assert(sizeof(memory_history_t) == MEM_HISTORY_ENTRY_SIZE,
         "memory_history_t size mismatch");
 _Static_assert(sizeof(xsave_area_t) == PROCESSOR_EXTENDED_STATE_SIZE,
         "processor extended state size mismatch");
+_Static_assert(_Alignof(xsave_area_t) >= 64,
+        "processor extended state alignment mismatch");
 
 #endif
