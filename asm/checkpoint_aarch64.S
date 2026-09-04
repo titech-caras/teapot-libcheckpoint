@@ -416,6 +416,15 @@ make_checkpoint_aarch64:
 	b.gt	.Lno_normal_coverage
 	ldr	x0, [x19, #CKPT_RETURN_ADDRESS]
 	bl	hfuzz_trace_pc
+	/* The coverage callback follows the platform ABI and may clobber every
+	 * caller-saved SIMD/FP register.  Restore the snapshot taken for this
+	 * checkpoint before returning to instrumented code. */
+	LOAD_ADDR x16, checkpoint_cnt
+	ldr	x17, [x16]
+	sub	x17, x17, #1
+	LOAD_ADDR x16, processor_extended_states
+	add	x16, x16, x17, lsl #PROCESSOR_EXTENDED_STATE_SHIFT
+	RESTORE_SIMD_STATE x16
 .Lno_normal_coverage:
 #endif
 

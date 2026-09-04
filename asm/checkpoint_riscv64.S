@@ -12,6 +12,7 @@
 #define RISCV_BOOT_X30 48
 #define RISCV_BOOT_X31 56
 #define RISCV_BOOT_SP 64
+#define RISCV_FLOAT_FCSR_OFFSET 256
 
 .macro LOAD_ADDR reg, symbol
 	lla	\reg, \symbol
@@ -31,7 +32,7 @@
 	mv	\result, \prev
 .endm
 
-.macro SAVE_FLOAT_STATE base
+.macro SAVE_FLOAT_STATE base, temp
 #ifdef ENABLE_RISCV_FLOAT_STATE
 	fsd	f0, 0(\base)
 	fsd	f1, 8(\base)
@@ -65,10 +66,12 @@
 	fsd	f29, 232(\base)
 	fsd	f30, 240(\base)
 	fsd	f31, 248(\base)
+	frcsr	\temp
+	sd	\temp, RISCV_FLOAT_FCSR_OFFSET(\base)
 #endif
 .endm
 
-.macro RESTORE_FLOAT_STATE base
+.macro RESTORE_FLOAT_STATE base, temp
 #ifdef ENABLE_RISCV_FLOAT_STATE
 	fld	f0, 0(\base)
 	fld	f1, 8(\base)
@@ -102,6 +105,8 @@
 	fld	f29, 232(\base)
 	fld	f30, 240(\base)
 	fld	f31, 248(\base)
+	ld	\temp, RISCV_FLOAT_FCSR_OFFSET(\base)
+	fscsr	\temp
 #endif
 .endm
 
@@ -414,7 +419,7 @@ make_checkpoint_riscv64:
 	sd	t6, 0(t5)
 #endif
 
-	SAVE_FLOAT_STATE t0
+	SAVE_FLOAT_STATE t0, t1
 
 	LOAD_ADDR t0, checkpoint_metadata
 	slli	t1, t2, CHECKPOINT_METADATA_SHIFT
@@ -443,6 +448,16 @@ make_checkpoint_riscv64:
 	bgt	t0, t1, .Lno_normal_coverage
 	ld	a0, CKPT_RETURN_ADDRESS(s0)
 	call	hfuzz_trace_pc
+	/* The coverage callback follows the platform ABI and may clobber every
+	 * caller-saved floating-point register.  Restore the checkpoint snapshot
+	 * before returning to instrumented code. */
+	LOAD_ADDR t0, checkpoint_cnt
+	ld	t1, 0(t0)
+	addi	t1, t1, -1
+	slli	t1, t1, PROCESSOR_EXTENDED_STATE_SHIFT
+	LOAD_ADDR t0, processor_extended_states
+	add	t0, t0, t1
+	RESTORE_FLOAT_STATE t0, t1
 .Lno_normal_coverage:
 #endif
 
@@ -476,7 +491,7 @@ restore_checkpoint_registers:
 	LOAD_ADDR t1, processor_extended_states
 	slli	t2, t2, PROCESSOR_EXTENDED_STATE_SHIFT
 	add	t1, t1, t2
-	RESTORE_FLOAT_STATE t1
+	RESTORE_FLOAT_STATE t1, t2
 
 #ifdef TIME
 	mv	s0, t0

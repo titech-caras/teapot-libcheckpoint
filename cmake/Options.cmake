@@ -9,7 +9,7 @@ set(TEAPOT_AARCH64_SHADOW_STACK_CONTROL_OFFSET "320" CACHE STRING "AArch64 contr
 set(TEAPOT_AARCH64_SHADOW_STACK_REPORT_OFFSET "416" CACHE STRING "AArch64 report-wrapper shadow stack slot offset")
 
 option(TEAPOT_ENABLE_DIFT_RUNTIME "Enable libcheckpoint DIFT shadow initialization" ON)
-option(TEAPOT_ENABLE_RISCV_FLOAT_STATE "Save and restore RISC-V floating-point registers" OFF)
+option(TEAPOT_ENABLE_RISCV_FLOAT_STATE "Save and restore RISC-V floating-point registers and FCSR" OFF)
 option(TEAPOT_BUILD_NESTED_RUNTIME "Build the nested-speculation checkpoint_nested runtime target" OFF)
 option(TEAPOT_BUILD_DIFT_MATH_WRAPPERS "Build optional DIFT wrappers for libm functions" OFF)
 option(TEAPOT_BUILD_DIFT_ZLIB_WRAPPERS "Build optional DIFT wrappers for zlib functions" OFF)
