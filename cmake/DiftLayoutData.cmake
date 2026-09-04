@@ -13,7 +13,12 @@ teapot_dift_layout(x64-la48-asan-new
     ASAN_SHADOW_OFFSET 0x7fff8000
     APP_RANGES
         0x0:0x7fff8000
+        0x7fff8000:0x8fff7000
+        0x2008fff7000:0x10007fff8000
+        # GCC 14's ASan primary allocator occupies the 0x50... region.  Its
+        # DIFT shadow therefore belongs in the disjoint 0x60... region.
         0x500000000000:0x600000000000
+        # Shared objects and the process stack normally occupy 0x70....
         0x700000000000:0x800000000000)
 
 teapot_dift_layout(x64-la57
@@ -29,8 +34,12 @@ teapot_dift_layout(aarch64-vma39
     ASAN_SHADOW_OFFSET 0x1000000000
     APP_RANGES
         0x0:0x1000000000
+        0x1000000000:0x1200000000
         0x1400000000:0x2000000000
-        0x7ff0000000:0x8000000000)
+        # QEMU user-mode and native top-down allocators may place large
+        # anonymous mappings below the loader and stack.  Cover the top 4 GiB
+        # instead of assuming every high mapping fits in the last 256 MiB.
+        0x7f00000000:0x8000000000)
 
 teapot_dift_layout(aarch64-vma42
     ARCH aarch64
@@ -56,6 +65,8 @@ teapot_dift_layout(riscv64-sv39
     ASAN_SHADOW_OFFSET 0xd55550000
     APP_RANGES
         0x0:0xd55550000
+        0xd55550000:0xeffffa000
+        0xfffffa000:0x1555550000
         0x1555550000:0x2000000000
         0x3ff0000000:0x4000000000)
 
