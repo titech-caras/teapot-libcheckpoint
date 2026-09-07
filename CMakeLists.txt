@@ -36,4 +36,17 @@ if(BUILD_TESTING AND CHECKPOINT_ARCH_NAME STREQUAL "x64")
         checkpoint_x64_xsave_report PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
+if(BUILD_TESTING AND CHECKPOINT_ARCH_NAME STREQUAL "aarch64")
+    add_executable(checkpoint_aarch64_report_call_nop_test
+        tests/checkpoint_aarch64_report_call_nop.c src/report_gadget.c)
+    teapot_configure_checkpoint_target(checkpoint_aarch64_report_call_nop_test)
+    # Test the patcher without linking the full runtime's startup mappings.
+    target_compile_options(checkpoint_aarch64_report_call_nop_test PRIVATE
+        -ffunction-sections -fdata-sections)
+    target_link_options(checkpoint_aarch64_report_call_nop_test PRIVATE
+        -Wl,--gc-sections)
+    add_test(NAME checkpoint_aarch64_report_call_nop
+        COMMAND checkpoint_aarch64_report_call_nop_test)
+endif()
+
 install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")

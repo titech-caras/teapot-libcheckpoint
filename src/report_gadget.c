@@ -75,6 +75,22 @@ static inline void restore_report_scratch_registers(void) {
 #endif
 
 void make_report_call_nop(uint64_t gadget_addr) {
+#if defined(__aarch64__)
+    /* AArch64 relaxation can expand the labelled BL into ADRP x16,
+     * ADD/LDR x16, BLR x16. The label still names the sequence's first
+     * instruction. Suppress its final call, not the address setup: leaving
+     * LDR/BLR behind a NOP would use an unrelated incoming x16 value.
+     * Recognize the two exact forms emitted by the rewriter; ordinary BL
+     * (including a linker-generated veneer) remains a single instruction.
+     */
+    const uint32_t *call = (const uint32_t *)gadget_addr;
+    if ((call[0] & 0x9f00001fU) == 0x90000010U &&
+        ((call[1] & 0xffc003ffU) == 0x91000210U ||
+         (call[1] & 0xffc003ffU) == 0xf9400210U) &&
+        (call[2] == 0xd63f0200U || call[2] == 0xd503201fU)) {
+        gadget_addr += 8;
+    }
+#endif
     uint64_t page_aligned_addr = gadget_addr & ~(4096UL - 1);
     if (mprotect((void*)page_aligned_addr, 8192, PROT_READ | PROT_WRITE | PROT_EXEC) == -1) {
         perror("mprotect");
