@@ -362,7 +362,7 @@ make_checkpoint_riscv64:
 
 #ifdef BRANCH_FULL_EXEC_COUNT
 	li	t4, BRANCH_FULL_EXEC_COUNT
-	bgt	t3, t4, .Lheuristic
+	bgtu	t3, t4, .Lheuristic
 	LOAD_ADDR t0, max_checkpoints
 	li	t1, MAX_CHECKPOINTS
 	sd	t1, 0(t0)
@@ -382,6 +382,10 @@ make_checkpoint_riscv64:
 .Lctz_done:
 	srli	t5, t5, 1
 	addi	t5, t5, 1
+	li	t1, MAX_CHECKPOINTS
+	bleu	t5, t1, .Ldepth_limit_ready
+	mv	t5, t1
+.Ldepth_limit_ready:
 	LOAD_ADDR t0, max_checkpoints
 	sd	t5, 0(t0)
 #else

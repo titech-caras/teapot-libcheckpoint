@@ -6,12 +6,6 @@
 #define AARCH64_REPORT_STATE_OFFSET (SCRATCHPAD_SIZE - 512)
 #define AARCH64_REPORT_SIMD_STATE_OFFSET (SCRATCHPAD_SIZE - 1040)
 #define AARCH64_REPORT_CALL_STACK_OFFSET (SCRATCHPAD_SIZE - 4096)
-#ifndef AARCH64_SHADOW_STACK_CONTROL_OFFSET
-#define AARCH64_SHADOW_STACK_CONTROL_OFFSET 320
-#endif
-#ifndef AARCH64_SHADOW_STACK_REPORT_OFFSET
-#define AARCH64_SHADOW_STACK_REPORT_OFFSET 416
-#endif
 
 .macro LOAD_ADDR reg, sym
 	ldr	\reg, =\sym
@@ -248,13 +242,13 @@ DEF_RESTORE_CHECKPOINT MALFORMED_INDIRECT_BR, ROLLBACK_MALFORMED_INDIRECT_BR
 	.type	report_gadget_aarch64_preserve_\type,%function
 report_gadget_aarch64_preserve_\type:
 	.cfi_startproc
-	sub	sp, sp, #2048, lsl #12
+	sub	sp, sp, #(AARCH64_SHADOW_STACK_SIZE >> 12), lsl #12
 	stp	x16, x17, [sp, #AARCH64_SHADOW_STACK_REPORT_OFFSET]
 	LOAD_ADDR x16, scratchpad + AARCH64_REPORT_STATE_OFFSET
 	ldr	x17, [sp, #AARCH64_SHADOW_STACK_REPORT_OFFSET]
 	str	x17, [x16, #200]
 	ldr	x17, [sp, #(AARCH64_SHADOW_STACK_REPORT_OFFSET + 8)]
-	add	sp, sp, #2048, lsl #12
+	add	sp, sp, #(AARCH64_SHADOW_STACK_SIZE >> 12), lsl #12
 	stp	x0, x1, [x16, #32]
 	stp	x2, x3, [x16, #48]
 	stp	x4, x5, [x16, #64]
@@ -317,7 +311,7 @@ make_checkpoint_aarch64:
 	mov	x17, sp
 	LOAD_ADDR x16, old_rsp
 	str	x17, [x16]
-	sub	x17, x17, #2048, lsl #12
+	sub	x17, x17, #(AARCH64_SHADOW_STACK_SIZE >> 12), lsl #12
 	LOAD_ADDR x16, scratchpad + SCRATCHPAD_SIZE
 	mov	sp, x16
 	sub	sp, sp, #AARCH64_FRAME_SIZE
@@ -355,6 +349,9 @@ make_checkpoint_aarch64:
 	clz	x1, x1
 	lsr	x1, x1, #1
 	add	x1, x1, #1
+	mov	x17, #MAX_CHECKPOINTS
+	cmp	x1, x17
+	csel	x1, x1, x17, ls
 	LOAD_ADDR x16, max_checkpoints
 	str	x1, [x16]
 #else
@@ -384,8 +381,9 @@ make_checkpoint_aarch64:
 
 #ifdef TIME
 	READ_TIMER_STAT x1, x2, x3
-	mov	x2, #0
-	cmp	x17, #1
+	LOAD_ADDR x2, checkpoint_cnt
+	ldr	x2, [x2]
+	cmp	x2, #1
 	cset	x2, gt
 	LOAD_ADDR x3, simulation_statistics
 	add	x3, x3, x2, lsl #3

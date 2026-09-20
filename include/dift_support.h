@@ -22,8 +22,8 @@ typedef uint8_t dift_tag_t;
 
 #ifndef __ASSEMBLER__
 // 0~15 = rax~r15, 16~47=zmm0~zmm31
-extern dift_tag_t dift_reg_tags[DIFT_REG_TAGS_SIZE];
-extern dift_tag_t dift_reg_queued_tags[DIFT_REG_TAGS_SIZE];
+extern dift_tag_t dift_reg_tags[DIFT_REG_TAGS_SIZE] __attribute__((aligned(16)));
+extern dift_tag_t dift_reg_queued_tags[DIFT_REG_TAGS_SIZE] __attribute__((aligned(16)));
 #endif
 
 #if defined(__x86_64__)

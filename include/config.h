@@ -15,10 +15,17 @@
 #endif
 
 #ifndef __ASSEMBLER__
+/* Protected objects must have size/alignment divisible by eight so poisoning
+ * never has to extend past the section into unrelated application storage. */
 #define LIBCHECKPOINT_PROTECTED_SECTION \
     __attribute__((section("teapot_protected"), used))
 #define LIBCHECKPOINT_PROTECTED_SECTION_ALIGNED(alignment) \
     __attribute__((section("teapot_protected"), used, aligned(alignment)))
+/* Pair each protected declaration with a check, including arrays and flags. */
+#define LIBCHECKPOINT_ASSERT_PROTECTED(object) \
+    _Static_assert(sizeof(object) % 8 == 0 && __alignof__(object) % 8 == 0 && \
+                   __alignof__(object) >= __alignof__(__typeof__(object)), \
+                   #object " must occupy whole aligned ASan granules")
 #endif
 
 // Define only for riscv64 targets built with floating-point register support.

@@ -47,7 +47,8 @@ teapot_dift_layout(aarch64-vma42
     ASAN_SHADOW_OFFSET 0x1000000000
     APP_RANGES
         0x0:0x1000000000
-        0x5000000000:0x20000000000
+        # Leave the XOR partner of the high application window for its tags.
+        0x5000000000:0x1fff0000000
         0x3fff0000000:0x40000000000
     DEFAULT_FOR aarch64)
 
@@ -67,7 +68,8 @@ teapot_dift_layout(riscv64-sv39
         0x0:0xd55550000
         0xd55550000:0xeffffa000
         0xfffffa000:0x1555550000
-        0x1555550000:0x2000000000
+        # Leave the XOR partner of the high application window for its tags.
+        0x1555550000:0x1ff0000000
         0x3ff0000000:0x4000000000)
 
 teapot_dift_layout(riscv64-sv48

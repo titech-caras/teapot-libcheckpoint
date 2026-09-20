@@ -16,12 +16,14 @@
 #endif
 
 dift_tag_t dift_reg_tags[DIFT_REG_TAGS_SIZE] LIBCHECKPOINT_PROTECTED_SECTION_ALIGNED(16);
+LIBCHECKPOINT_ASSERT_PROTECTED(dift_reg_tags);
 
 /*
  * If a manual tag update is required as a result of a gadget policy,
  * it is buffered here first and updated after DIFT propagation.
  */
 dift_tag_t dift_reg_queued_tags[DIFT_REG_TAGS_SIZE] LIBCHECKPOINT_PROTECTED_SECTION_ALIGNED(16);
+LIBCHECKPOINT_ASSERT_PROTECTED(dift_reg_queued_tags);
 
 #define MAX_RUNTIME_MAPPED_RANGES 64
 struct mapped_range {

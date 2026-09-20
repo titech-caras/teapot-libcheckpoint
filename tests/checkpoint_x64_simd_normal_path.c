@@ -1,7 +1,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-extern bool libcheckpoint_enabled;
+extern uint64_t libcheckpoint_enabled;
 extern uint64_t checkpoint_cnt;
 extern uint64_t processor_xsave_mask;
 

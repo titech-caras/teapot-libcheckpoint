@@ -41,37 +41,34 @@
 #endif
 #endif
 
-#if defined(__GNUC__) && !defined(__clang__) && \
-        (defined(__aarch64__) || (defined(__riscv) && __riscv_xlen == 64))
-#define LIBCHECKPOINT_RESTORE_PATH __attribute__((noinline, optimize("O0")))
-#else
 #define LIBCHECKPOINT_RESTORE_PATH __attribute__((noinline))
-#endif
 
 extern char __start_teapot_protected[];
 extern char __stop_teapot_protected[];
+extern char __start_teapot_protected_bss[];
+extern char __stop_teapot_protected_bss[];
 
 checkpoint_metadata_t checkpoint_metadata[MAX_CHECKPOINTS] LIBCHECKPOINT_PROTECTED_SECTION;
 xsave_area_t processor_extended_states[MAX_CHECKPOINTS] LIBCHECKPOINT_PROTECTED_SECTION;
+LIBCHECKPOINT_ASSERT_PROTECTED(checkpoint_metadata);
+LIBCHECKPOINT_ASSERT_PROTECTED(processor_extended_states);
 
 #if defined(__x86_64__)
 uint64_t processor_xsave_mask LIBCHECKPOINT_PROTECTED_SECTION = 0;
+LIBCHECKPOINT_ASSERT_PROTECTED(processor_xsave_mask);
 /*
  * Report calls cannot borrow scratchpad storage for XSAVE: the scratchpad is
  * also a C stack, while XRSTOR requires a 64-byte-aligned image whose reserved
  * header bytes remain zero. Static storage supplies both invariants.
  */
 xsave_area_t report_extended_state LIBCHECKPOINT_PROTECTED_SECTION;
+LIBCHECKPOINT_ASSERT_PROTECTED(report_extended_state);
 #endif
 
-memory_history_t memory_history[MEM_HISTORY_LEN] LIBCHECKPOINT_PROTECTED_SECTION;
 memory_history_t *memory_history_top LIBCHECKPOINT_PROTECTED_SECTION = &memory_history[0];
-uint32_t guard_list[GUARD_LIST_LEN] LIBCHECKPOINT_PROTECTED_SECTION;
 uint32_t *guard_list_top LIBCHECKPOINT_PROTECTED_SECTION = &guard_list[0];
 
-scratchpad_t scratchpad LIBCHECKPOINT_PROTECTED_SECTION;
 void *old_rsp LIBCHECKPOINT_PROTECTED_SECTION;
-void *scratchpad_rsp LIBCHECKPOINT_PROTECTED_SECTION;
 
 statistics_t simulation_statistics LIBCHECKPOINT_PROTECTED_SECTION;
 
@@ -80,9 +77,21 @@ uint64_t checkpoint_cnt LIBCHECKPOINT_PROTECTED_SECTION = 0;
 uint64_t instruction_cnt LIBCHECKPOINT_PROTECTED_SECTION = 0;
 uint64_t indirect_branch_flags_scratch LIBCHECKPOINT_PROTECTED_SECTION = 0;
 
-bool libcheckpoint_enabled LIBCHECKPOINT_PROTECTED_SECTION = false;
-static bool libcheckpoint_runtime_initialized LIBCHECKPOINT_PROTECTED_SECTION = false;
-volatile bool in_restore_memlog LIBCHECKPOINT_PROTECTED_SECTION = false;
+/* Whole-granule flags keep section bounds aligned in every object order. */
+uint64_t libcheckpoint_enabled LIBCHECKPOINT_PROTECTED_SECTION = false;
+static uint64_t libcheckpoint_runtime_initialized LIBCHECKPOINT_PROTECTED_SECTION = false;
+volatile uint64_t in_restore_memlog LIBCHECKPOINT_PROTECTED_SECTION = false;
+LIBCHECKPOINT_ASSERT_PROTECTED(memory_history_top);
+LIBCHECKPOINT_ASSERT_PROTECTED(guard_list_top);
+LIBCHECKPOINT_ASSERT_PROTECTED(old_rsp);
+LIBCHECKPOINT_ASSERT_PROTECTED(simulation_statistics);
+LIBCHECKPOINT_ASSERT_PROTECTED(last_rdtsc);
+LIBCHECKPOINT_ASSERT_PROTECTED(checkpoint_cnt);
+LIBCHECKPOINT_ASSERT_PROTECTED(instruction_cnt);
+LIBCHECKPOINT_ASSERT_PROTECTED(indirect_branch_flags_scratch);
+LIBCHECKPOINT_ASSERT_PROTECTED(libcheckpoint_enabled);
+LIBCHECKPOINT_ASSERT_PROTECTED(libcheckpoint_runtime_initialized);
+LIBCHECKPOINT_ASSERT_PROTECTED(in_restore_memlog);
 
 __attribute__((weak)) void __asan_init(void);
 __attribute__((weak)) void __asan_poison_memory_region(void const volatile *addr, size_t size);
@@ -177,24 +186,32 @@ static void initialize_x64_extended_state() {
 #endif
 
 void poison_protected_zone() {
-    uintptr_t protected_start = (uintptr_t)__start_teapot_protected;
-    uintptr_t protected_end = (uintptr_t)__stop_teapot_protected;
-    if (protected_end <= protected_start) {
-        return;
-    }
-
 #if defined(__aarch64__) && defined(TEAPOT_AARCH64_MTE_TAG_STORAGE)
-    uintptr_t aligned_start = protected_start & ~(uintptr_t)0xf;
-    for (uintptr_t addr = aligned_start; addr < protected_end; addr += 16) {
-        mte_store_tag(addr, 0xf);
-    }
+    /* Runtime metadata remains untagged; MTE storage covers stack and heap. */
+    return;
 #else
     if (!__asan_poison_memory_region) {
         fputs("Teapot instrumented binaries must provide __asan_poison_memory_region\n", stderr);
         abort();
     }
 
-    __asan_poison_memory_region((void *)protected_start, protected_end - protected_start);
+    const struct {
+        char *start;
+        char *end;
+    } ranges[] = {
+        {__start_teapot_protected, __stop_teapot_protected},
+        {__start_teapot_protected_bss, __stop_teapot_protected_bss},
+    };
+    for (size_t i = 0; i < sizeof(ranges) / sizeof(ranges[0]); i++) {
+        uintptr_t start = (uintptr_t)ranges[i].start;
+        uintptr_t end = (uintptr_t)ranges[i].end;
+        if ((start | end) & 7) {
+            fputs("Teapot protected storage must have ASan-granule-aligned bounds\n", stderr);
+            abort();
+        }
+        if (end > start)
+            __asan_poison_memory_region((void *)start, end - start);
+    }
 #endif
 }
 
@@ -227,10 +244,13 @@ static void enable_mte_for_mapped_app_overlap(uintptr_t app_start, uintptr_t app
     while (fgets(line, sizeof(line), maps) != NULL) {
         unsigned long long range_start;
         unsigned long long range_end;
+        unsigned long long inode;
         char perms[5] = {0};
-        if (sscanf(line, "%llx-%llx %4s", &range_start, &range_end, perms) != 3)
+        if (sscanf(line, "%llx-%llx %4s %*s %*s %llu",
+                   &range_start, &range_end, perms, &inode) != 4)
             continue;
-        if (perms[1] != 'w')
+        /* Ordinary file-backed globals and runtime metadata stay untagged. */
+        if (perms[1] != 'w' || inode != 0)
             continue;
 
         uintptr_t start = (uintptr_t)range_start;
@@ -298,9 +318,6 @@ static void initialize_first_spill_state() {
 
 static void initialize_shadow_stack_state() {
 #if defined(__aarch64__)
-#ifndef AARCH64_SHADOW_STACK_SIZE
-#define AARCH64_SHADOW_STACK_SIZE (8ULL * 1024ULL * 1024ULL)
-#endif
     volatile uint8_t stack_marker;
     uintptr_t sp = (uintptr_t)&stack_marker;
     long page_size = sysconf(_SC_PAGESIZE);
@@ -540,8 +557,15 @@ LIBCHECKPOINT_RESTORE_PATH __attribute__((noreturn)) void restore_checkpoint(int
 
 LIBCHECKPOINT_RESTORE_PATH __attribute__((noreturn)) void restore_checkpoint_after_memlog() {
     instruction_cnt = checkpoint_metadata[checkpoint_cnt].instruction_cnt;
-    for (size_t i = 0; i < DIFT_REG_TAGS_SIZE; i++) {
-        dift_reg_tags[i] = checkpoint_metadata[checkpoint_cnt].dift_reg_tags[i];
+    // Protected tag storage must not go through an intercepted memcpy. Word
+    // accesses keep this small copy inline even with loop optimization enabled.
+    typedef uint64_t tag_word_t __attribute__((may_alias));
+    _Static_assert(DIFT_REG_TAGS_SIZE % sizeof(tag_word_t) == 0, "whole tag words");
+    _Static_assert(CKPT_DIFT_REG_TAGS % _Alignof(tag_word_t) == 0, "aligned saved tags");
+    volatile tag_word_t *dst = (volatile tag_word_t *)dift_reg_tags;
+    const tag_word_t *src = (const tag_word_t *)checkpoint_metadata[checkpoint_cnt].dift_reg_tags;
+    for (size_t i = 0; i < DIFT_REG_TAGS_SIZE / sizeof(tag_word_t); i++) {
+        dst[i] = src[i];
     }
 
     restore_checkpoint_registers();

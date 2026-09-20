@@ -278,6 +278,10 @@ make_checkpoint_x64:
 	tzcntq	%rbx, %rbx
 	shrq	$1, %rbx
 	incq	%rbx
+	cmpq	$MAX_CHECKPOINTS, %rbx
+	jbe	.Ldepth_limit_ready
+	movq	$MAX_CHECKPOINTS, %rbx
+.Ldepth_limit_ready:
 	movq	%rbx, max_checkpoints
 #else
 	movq	$1, max_checkpoints

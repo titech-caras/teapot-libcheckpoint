@@ -1,5 +1,7 @@
 #pragma once
 
+#include <aarch64_shadow_stack.h>
+
 #ifndef __ASSEMBLER__
 #include <stdint.h>
 #include <stdbool.h>
@@ -250,15 +252,16 @@ typedef __attribute__((aligned(16))) uint8_t scratchpad_t[SCRATCHPAD_SIZE];
 #define GADGET_KASPER_PORT 43
 
 extern scratchpad_t scratchpad;
+extern memory_history_t memory_history[MEM_HISTORY_LEN];
 extern checkpoint_metadata_t checkpoint_metadata[MAX_CHECKPOINTS];
 extern uint32_t guard_list[GUARD_LIST_LEN];
 extern uint64_t checkpoint_cnt, instruction_cnt;
 extern uint64_t indirect_branch_flags_scratch;
 extern statistics_t simulation_statistics;
 extern uint64_t last_rdtsc;
-extern bool libcheckpoint_enabled;
+extern uint64_t libcheckpoint_enabled;
 
-extern volatile bool in_restore_memlog;
+extern volatile uint64_t in_restore_memlog;
 
 #if defined(__x86_64__)
 /* Zero selects the legacy XMM-only fallback on machines without OSXSAVE. */
@@ -277,7 +280,6 @@ __attribute__((noreturn)) void make_checkpoint_aarch64();
 #elif defined(__riscv) && __riscv_xlen == 64
 __attribute__((noreturn)) void make_checkpoint_riscv64();
 #endif
-void add_instruction_counter_check_restore();
 __attribute__((noreturn)) void restore_checkpoint(int type);
 void restore_checkpoint_memlog();
 __attribute__((noreturn)) void restore_checkpoint_after_memlog();

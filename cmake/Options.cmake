@@ -1,12 +1,13 @@
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 set(CMAKE_C_FLAGS_DEBUG "-g ${CMAKE_C_FLAGS}")
 set(CMAKE_C_FLAGS_RELEASE "-O3 ${CMAKE_C_FLAGS}")
 
 set(CHECKPOINT_ARCH "" CACHE STRING "Target architecture override for libcheckpoint")
 set(TEAPOT_DIFT_LAYOUT "" CACHE STRING "Teapot DIFT layout profile")
 set(TEAPOT_AARCH64_TAG_STORAGE "shadow" CACHE STRING "AArch64 Teapot ASan-style tag storage backend: shadow or mte")
-set(TEAPOT_AARCH64_SHADOW_STACK_SIZE "8388608" CACHE STRING "AArch64 fixed-offset shadow stack size")
-set(TEAPOT_AARCH64_SHADOW_STACK_CONTROL_OFFSET "320" CACHE STRING "AArch64 control shadow stack slot offset")
-set(TEAPOT_AARCH64_SHADOW_STACK_REPORT_OFFSET "416" CACHE STRING "AArch64 report-wrapper shadow stack slot offset")
 
 option(TEAPOT_ENABLE_DIFT_RUNTIME "Enable libcheckpoint DIFT shadow initialization" ON)
 option(TEAPOT_ENABLE_RISCV_FLOAT_STATE "Save and restore RISC-V floating-point registers and FCSR" OFF)

@@ -1,5 +1,6 @@
 set(DIFT_RANGE_DEFS)
 set(TEAPOT_DIFT_LAYOUT_ARCH)
+include("${CMAKE_CURRENT_LIST_DIR}/DiftLayoutValidation.cmake")
 
 function(teapot_dift_layout name)
     set(one_value_args ARCH XOR_MASK ASAN_SHADOW_OFFSET DEFAULT_FOR)
@@ -18,6 +19,8 @@ function(teapot_dift_layout name)
     if(NOT LAYOUT_APP_RANGES)
         message(FATAL_ERROR "DIFT layout ${name} does not define APP_RANGES")
     endif()
+    teapot_validate_dift_layout("${name}" "${LAYOUT_XOR_MASK}"
+        "${LAYOUT_ASAN_SHADOW_OFFSET}" ${LAYOUT_APP_RANGES})
 
     set(selected FALSE)
     if("${TEAPOT_DIFT_LAYOUT}" STREQUAL "${name}")
@@ -54,6 +57,8 @@ function(teapot_dift_layout name)
 endfunction()
 
 include("${CMAKE_CURRENT_LIST_DIR}/DiftLayoutData.cmake")
+install(FILES "${CMAKE_CURRENT_LIST_DIR}/DiftLayoutData.cmake"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/libcheckpoint" COMPONENT checkpoint-config)
 
 if(NOT TEAPOT_DIFT_LAYOUT_ARCH)
     message(FATAL_ERROR "Unsupported Teapot DIFT layout: ${TEAPOT_DIFT_LAYOUT}")

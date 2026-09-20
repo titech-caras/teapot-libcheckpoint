@@ -1,6 +1,7 @@
 #include "checkpoint.h"
 
 #include <cpuid.h>
+#include <sanitizer/asan_interface.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -74,7 +75,9 @@ int main(void) {
     processor_xsave_mask = mask;
     checkpoint_cnt = 0;
     libcheckpoint_enabled = true;
+    __asan_poison_memory_region(scratchpad, sizeof(scratchpad));
     int preserved = checkpoint_x64_xsave_report_probe((uintptr_t)report_site);
+    __asan_unpoison_memory_region(scratchpad, sizeof(scratchpad));
     libcheckpoint_enabled = false;
 
     static const unsigned char report_nop[] = {0x0f, 0x1f, 0x44, 0x00, 0x00};

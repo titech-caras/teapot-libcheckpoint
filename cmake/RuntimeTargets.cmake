@@ -18,25 +18,21 @@ endif()
 
 set(CHECKPOINT_RUNTIME_SOURCES
     src/checkpoint.c
+    asm/storage.S
     ${CHECKPOINT_ASM_SOURCE}
     src/signal_handler.c
     src/dift_support.c
     src/dift_wrappers/dift_wrappers.c
     src/report_gadget.c)
-set_source_files_properties(${CHECKPOINT_ASM_SOURCE} PROPERTIES COMPILE_FLAGS -O0)
 
 function(teapot_configure_checkpoint_target target)
     target_include_directories(${target} PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>"
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
     target_compile_options(${target} PRIVATE -fno-stack-protector)
     target_compile_definitions(${target} PRIVATE
         DIFT_XOR_MASK=${DIFT_XOR_MASK}
-        CHECKPOINT_ASAN_SHADOW_OFFSET=${DIFT_ASAN_SHADOW_OFFSET}
-        CHECKPOINT_ASAN_LOW_APP_LIMIT=${DIFT_ASAN_SHADOW_OFFSET}
-        AARCH64_SHADOW_STACK_SIZE=${TEAPOT_AARCH64_SHADOW_STACK_SIZE}ULL
-        AARCH64_SHADOW_STACK_CONTROL_OFFSET=${TEAPOT_AARCH64_SHADOW_STACK_CONTROL_OFFSET}
-        AARCH64_SHADOW_STACK_REPORT_OFFSET=${TEAPOT_AARCH64_SHADOW_STACK_REPORT_OFFSET}
         ${TEAPOT_DIFT_RUNTIME_DEFS}
         ${TEAPOT_ARCH_RUNTIME_DEFS}
         ${DIFT_RANGE_DEFS})
