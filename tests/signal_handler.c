@@ -100,6 +100,38 @@ static void check_default_forwarding(void) {
     }
 }
 
+static void stack_using_saved_handler(int sig) {
+    volatile unsigned char work[32 * 1024];
+    for (size_t i = 0; i < sizeof(work); i++)
+        work[i] = (unsigned char)i;
+    for (size_t i = 0; i < sizeof(work); i++)
+        if (work[i] != (unsigned char)i)
+            _exit(2);
+    _exit(sig == SIGILL ? 0 : 3);
+}
+
+static void check_forwarding_stack_budget(void) {
+    pid_t child = fork();
+    assert(child >= 0);
+    if (child == 0) {
+        struct rlimit limit = {0, 0};
+        assert(setrlimit(RLIMIT_CORE, &limit) == 0);
+        checkpoint_cnt = 0;
+        in_restore_memlog = false;
+        signal(SIGILL, stack_using_saved_handler);
+        setup_signal_handler();
+        stack_t stack;
+        assert(sigaltstack(NULL, &stack) == 0);
+        assert(!(stack.ss_flags & SS_DISABLE));
+        assert(stack.ss_size >= 64 * 1024 + (size_t)SIGSTKSZ);
+        raise(SIGILL);
+        _exit(1);
+    }
+    int status;
+    assert(waitpid(child, &status, 0) == child);
+    assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
 static void check_signal_return(void) {
     pid_t child = fork();
     assert(child >= 0);
@@ -125,9 +157,10 @@ int main(int argc, char **argv) {
     assert(argc == 2);
     if (strcmp(argv[1], "context") == 0)
         check_contexts();
-    else if (strcmp(argv[1], "forward") == 0)
+    else if (strcmp(argv[1], "forward") == 0) {
         check_default_forwarding();
-    else if (strcmp(argv[1], "redirect") == 0)
+        check_forwarding_stack_budget();
+    } else if (strcmp(argv[1], "redirect") == 0)
         check_signal_return();
     else
         return 1;

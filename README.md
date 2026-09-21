@@ -49,6 +49,10 @@ build the runtime sources with `TIME` in both default and nested modes; this
 does not enable those options in the ordinary `checkpoint` target.
 Cross-compiled tests need a suitable `CMAKE_CROSSCOMPILING_EMULATOR` launcher,
 including the address-space reservation required by QEMU.
+The single-threaded runtime reserves a guarded alternate signal stack with the
+kernel-reported signal-frame minimum plus 64 KiB of handler space (at least
+`SIGSTKSZ` is reserved for the frame on older kernels). This avoids overflowing
+old libc's fixed `SIGSTKSZ` during out-of-simulation diagnostics and forwarding.
 ASan-only tests are registered only when a real executable link probe succeeds,
 including in cross builds. Static-only configurations omit those tests explicitly;
 they still run the non-ASan runtime tests, not a substitute shadow mapper.

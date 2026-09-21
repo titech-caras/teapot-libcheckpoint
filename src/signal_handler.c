@@ -1,12 +1,21 @@
+#define _GNU_SOURCE
 #include "signal_handler.h"
 #include "checkpoint.h"
 
-#define __USE_GNU
 #include <stdbool.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/auxv.h>
+#include <sys/mman.h>
 #include <ucontext.h>
+#include <unistd.h>
+
+// Older libc headers predate this Linux auxiliary-vector entry.
+#ifndef AT_MINSIGSTKSZ
+#define AT_MINSIGSTKSZ 51
+#endif
 
 struct saved_signal_action {
     int sig;
@@ -109,16 +118,45 @@ static void install_signal_handler(int sig, const struct sigaction *action) {
 }
 
 void setup_signal_handler() {
-    static char signal_stack[SIGSTKSZ]; // so that SIGSEGV doesn't overwrite stack contents in speculation
-    static stack_t ss = {
-        .ss_size = SIGSTKSZ,
-        .ss_sp = signal_stack,
-    };
+    // The kernel's frame (including extended CPU state) and the handler's
+    // stack are separate budgets. SIGSTKSZ alone can leave too little room
+    // for libc's forwarding diagnostic on older libc/newer CPU combinations.
+    // Keep this independent of application/scratch stacks and guard both ends.
+    static stack_t ss;
+    if (ss.ss_sp == NULL) {
+        const size_t handler_budget = 64 * 1024;
+        size_t frame_size = getauxval(AT_MINSIGSTKSZ);
+        if (frame_size < (size_t)SIGSTKSZ)
+            frame_size = (size_t)SIGSTKSZ;
+        long page_size = sysconf(_SC_PAGESIZE);
+        if (page_size <= 0 ||
+                frame_size > SIZE_MAX - handler_budget - 3 * (size_t)page_size)
+            abort();
+        size_t size = ((frame_size + handler_budget + page_size - 1) /
+                       page_size) * page_size;
+        void *mapping = mmap(NULL, size + 2 * page_size, PROT_NONE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (mapping == MAP_FAILED) {
+            perror("mmap signal stack");
+            abort();
+        }
+        void *stack = (char *)mapping + page_size;
+        if (mprotect(stack, size, PROT_READ | PROT_WRITE) != 0) {
+            perror("mprotect signal stack");
+            munmap(mapping, size + 2 * page_size);
+            abort();
+        }
+        ss.ss_sp = stack;
+        ss.ss_size = size;
+    }
     struct sigaction sa = {
         .sa_sigaction = signal_handler,
         .sa_flags = SA_ONSTACK | SA_SIGINFO
     };
-    sigaltstack(&ss, 0);
+    if (sigaltstack(&ss, NULL) != 0) {
+        perror("sigaltstack");
+        abort();
+    }
     sigfillset(&sa.sa_mask);
     install_signal_handler(SIGSEGV, &sa);
     install_signal_handler(SIGILL, &sa);
