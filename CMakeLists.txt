@@ -143,9 +143,15 @@ if(BUILD_TESTING)
                 PASS_REGULAR_EXPRESSION "teapot_protected_bss[ \t]+NOBITS")
         endif()
         if(CHECKPOINT_ARCH_NAME STREQUAL "aarch64")
+            target_sources(${entry_test} PRIVATE
+                tests/checkpoint_aarch64_bti.c tests/checkpoint_aarch64_bti.S)
             add_test(NAME checkpoint_entry_${mode}_report
                 COMMAND ${entry_test} report)
             set_tests_properties(checkpoint_entry_${mode}_report PROPERTIES TIMEOUT 10)
+            add_test(NAME checkpoint_entry_${mode}_bti_fault
+                COMMAND ${entry_test} bti-fault)
+            set_tests_properties(checkpoint_entry_${mode}_bti_fault PROPERTIES
+                TIMEOUT 10 SKIP_RETURN_CODE 77)
         endif()
     endforeach()
 endif()

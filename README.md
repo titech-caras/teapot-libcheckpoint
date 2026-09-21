@@ -47,6 +47,12 @@ probes for capacity, counter rollover, timing classification, and memory-history
 recovery after a read-only destination faults. Entry probes
 build the runtime sources with `TIME` in both default and nested modes; this
 does not enable those options in the ordinary `checkpoint` target.
+On AArch64, an additional entry probe checks actual `PROT_BTI` fault recovery
+and original-handler forwarding. It verifies memory history, DIFT tags, selected
+GPRs and the instruction counter; missing hardware/OS enforcement is an explicit
+CTest skip. The nested variant creates an inner checkpoint at an initialized
+depth-one state, not a live outer checkpoint chain. Recovery code remains
+unguarded, so this is not validation of a BTI target-identification backend.
 Cross-compiled tests need a suitable `CMAKE_CROSSCOMPILING_EMULATOR` launcher,
 including the address-space reservation required by QEMU.
 The single-threaded runtime reserves a guarded alternate signal stack with the

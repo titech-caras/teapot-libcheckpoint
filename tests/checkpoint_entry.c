@@ -23,6 +23,7 @@ extern char __start_teapot_protected[], __stop_teapot_protected[];
 extern char __start_teapot_protected_bss[], __stop_teapot_protected_bss[];
 #if defined(__aarch64__)
 extern int checkpoint_report_probe(void *stack_top);
+extern int check_aarch64_bti_fault(void *stack_top);
 #endif
 
 uint32_t __guard_start__teapot__[1];
@@ -247,6 +248,11 @@ int main(int argc, char **argv) {
 #if defined(__aarch64__)
     else if (strcmp(argv[1], "report") == 0)
         assert(checkpoint_report_probe(stack_top) == 1);
+    else if (strcmp(argv[1], "bti-fault") == 0) {
+        int status = check_aarch64_bti_fault(stack_top);
+        assert(munmap(mapping, stack_size) == 0);
+        return status;
+    }
 #endif
     else
         return 2;
