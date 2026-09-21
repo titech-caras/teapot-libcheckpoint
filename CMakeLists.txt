@@ -152,6 +152,12 @@ if(BUILD_TESTING)
                 COMMAND ${entry_test} bti-fault)
             set_tests_properties(checkpoint_entry_${mode}_bti_fault PROPERTIES
                 TIMEOUT 10 SKIP_RETURN_CODE 77)
+            if(mode STREQUAL "nested")
+                add_test(NAME checkpoint_entry_nested_bti_live_chain
+                    COMMAND ${entry_test} bti-live-chain)
+                set_tests_properties(checkpoint_entry_nested_bti_live_chain PROPERTIES
+                    TIMEOUT 10 SKIP_RETURN_CODE 77)
+            endif()
         endif()
     endforeach()
 endif()
