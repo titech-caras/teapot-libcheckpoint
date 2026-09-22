@@ -14,3 +14,4 @@ option(TEAPOT_ENABLE_RISCV_FLOAT_STATE "Save and restore RISC-V floating-point r
 option(TEAPOT_BUILD_NESTED_RUNTIME "Build the nested-speculation checkpoint_nested runtime target" OFF)
 option(TEAPOT_BUILD_DIFT_MATH_WRAPPERS "Build optional DIFT wrappers for libm functions" OFF)
 option(TEAPOT_BUILD_DIFT_ZLIB_WRAPPERS "Build optional DIFT wrappers for zlib functions" OFF)
+option(TEAPOT_EXPERIMENTAL_AARCH64_BTI "Enable the page-isolated AArch64 BTI experiment" OFF)

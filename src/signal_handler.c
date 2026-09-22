@@ -12,6 +12,13 @@
 #include <ucontext.h>
 #include <unistd.h>
 
+#ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
+/* Weak so the standalone signal tests and ordinary runtime users need not
+ * link/enable the experimental backend. Rewritten BTI inputs require its
+ * strong initialization symbol explicitly. */
+extern bool teapot_aarch64_bti_signal(int, siginfo_t *, void *) __attribute__((weak));
+#endif
+
 // Older libc headers predate this Linux auxiliary-vector entry.
 #ifndef AT_MINSIGSTKSZ
 #define AT_MINSIGSTKSZ 51
@@ -100,6 +107,10 @@ void signal_handler(int sig, siginfo_t *info, void *ucontext) {
 
     if (in_restore_memlog) {
         restart_restore_checkpoint_memlog(ucontext);
+#ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
+    } else if (teapot_aarch64_bti_signal && teapot_aarch64_bti_signal(sig, info, ucontext)) {
+        return;
+#endif
     } else if (checkpoint_cnt != 0) {
         *pc = (uintptr_t)&restore_checkpoint_SIGSEGV;
     } else {

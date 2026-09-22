@@ -4,6 +4,12 @@ if(NOT TEAPOT_ENABLE_DIFT_RUNTIME)
 endif()
 
 set(TEAPOT_ARCH_RUNTIME_DEFS)
+if(TEAPOT_EXPERIMENTAL_AARCH64_BTI)
+    if(NOT CHECKPOINT_ARCH_NAME STREQUAL "aarch64")
+        message(FATAL_ERROR "The BTI experiment requires AArch64")
+    endif()
+    list(APPEND TEAPOT_ARCH_RUNTIME_DEFS TEAPOT_EXPERIMENTAL_AARCH64_BTI)
+endif()
 if(TEAPOT_ENABLE_RISCV_FLOAT_STATE)
     list(APPEND TEAPOT_ARCH_RUNTIME_DEFS ENABLE_RISCV_FLOAT_STATE)
 endif()
@@ -24,6 +30,9 @@ set(CHECKPOINT_RUNTIME_SOURCES
     src/dift_support.c
     src/dift_wrappers/dift_wrappers.c
     src/report_gadget.c)
+if(TEAPOT_EXPERIMENTAL_AARCH64_BTI)
+    list(APPEND CHECKPOINT_RUNTIME_SOURCES src/aarch64_bti.c asm/aarch64_bti.S)
+endif()
 
 function(teapot_configure_checkpoint_target target)
     target_include_directories(${target} PUBLIC

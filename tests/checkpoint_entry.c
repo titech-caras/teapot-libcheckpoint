@@ -25,6 +25,9 @@ extern char __start_teapot_protected_bss[], __stop_teapot_protected_bss[];
 extern int checkpoint_report_probe(void *stack_top);
 extern int check_aarch64_bti_fault(void *stack_top);
 extern int check_aarch64_bti_live_chain(void *stack_top);
+#ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
+extern int check_aarch64_bti_backend(void *stack_top, bool live_chain);
+#endif
 #endif
 
 uint32_t __guard_start__teapot__[1];
@@ -259,6 +262,15 @@ int main(int argc, char **argv) {
         assert(munmap(mapping, stack_size) == 0);
         return status;
     }
+#ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
+    else if (strcmp(argv[1], "bti-backend") == 0 ||
+             strcmp(argv[1], "bti-backend-live-chain") == 0) {
+        int status = check_aarch64_bti_backend(stack_top,
+                         strcmp(argv[1], "bti-backend-live-chain") == 0);
+        assert(munmap(mapping, stack_size) == 0);
+        return status;
+    }
+#endif
 #endif
     else
         return 2;

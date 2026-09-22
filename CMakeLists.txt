@@ -145,6 +145,21 @@ if(BUILD_TESTING)
         if(CHECKPOINT_ARCH_NAME STREQUAL "aarch64")
             target_sources(${entry_test} PRIVATE
                 tests/checkpoint_aarch64_bti.c tests/checkpoint_aarch64_bti.S)
+            if(TEAPOT_EXPERIMENTAL_AARCH64_BTI)
+                target_sources(${entry_test} PRIVATE tests/checkpoint_aarch64_bti_layout.S)
+                target_link_options(${entry_test} PRIVATE
+                    "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/cmake/AArch64Bti.ld")
+                add_test(NAME checkpoint_entry_${mode}_bti_backend
+                    COMMAND ${entry_test} bti-backend)
+                set_tests_properties(checkpoint_entry_${mode}_bti_backend PROPERTIES
+                    TIMEOUT 10 SKIP_RETURN_CODE 77)
+                if(mode STREQUAL "nested")
+                    add_test(NAME checkpoint_entry_nested_bti_backend_live_chain
+                        COMMAND ${entry_test} bti-backend-live-chain)
+                    set_tests_properties(checkpoint_entry_nested_bti_backend_live_chain PROPERTIES
+                        TIMEOUT 10 SKIP_RETURN_CODE 77)
+                endif()
+            endif()
             add_test(NAME checkpoint_entry_${mode}_report
                 COMMAND ${entry_test} report)
             set_tests_properties(checkpoint_entry_${mode}_report PROPERTIES TIMEOUT 10)

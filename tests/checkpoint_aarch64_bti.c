@@ -1,5 +1,6 @@
 /* Real guarded-page BTI faults, using the existing checkpoint/restore path.
- * This test does not enable a hardware target-identification backend.
+ * The default fault tests keep ordinary policy; explicit bti-backend variants
+ * additionally enable and exercise the experimental target-identification path.
  */
 #define _GNU_SOURCE
 #undef NDEBUG
@@ -30,6 +31,14 @@ extern memory_history_t *memory_history_top;
 extern uint32_t *guard_list_top;
 static uint64_t test_memory;
 static void *fault_target;
+static unsigned expected_bti_reason = ROLLBACK_SIGSEGV;
+#ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
+static bool test_active_backend;
+extern void teapot_aarch64_bti_activate(void);
+extern int teapot_bti_call_probe(void *);
+extern char teapot_bti_test_marker[], teapot_bti_test_plain[];
+extern uint64_t teapot_bti_normal_resumes, teapot_bti_rollbacks;
+#endif
 
 #ifdef ENABLE_NESTED_SPECULATION
 extern int checkpoint_bti_nested_probe(void *stack_top, void *target);
@@ -74,7 +83,7 @@ void checkpoint_bti_check_outer(int inner_result) {
     assert(!in_restore_memlog);
     for (size_t i = 0; i < DIFT_REG_TAGS_SIZE; i++) assert(dift_reg_tags[i] == i + 17);
     assert(memcmp(&outer_checkpoint, &checkpoint_metadata[0], sizeof(outer_checkpoint)) == 0);
-    assert(simulation_statistics.rollback_reason[ROLLBACK_SIGSEGV] == chain_signal_rollbacks + 1);
+    assert(simulation_statistics.rollback_reason[expected_bti_reason] == chain_signal_rollbacks + 1);
     assert(chain_faults == 1 && chain_bad_faults == 0);
     chain_inner_restored = 1;
 }
@@ -87,7 +96,7 @@ static void check_live_chain(void *stack_top) {
     for (size_t i = 0; i < DIFT_REG_TAGS_SIZE; i++) dift_reg_tags[i] = (uint8_t)(i + 1);
     chain_history = memory_history_top;
     chain_guards = guard_list_top;
-    chain_signal_rollbacks = simulation_statistics.rollback_reason[ROLLBACK_SIGSEGV];
+    chain_signal_rollbacks = simulation_statistics.rollback_reason[expected_bti_reason];
     uint64_t saved_budget_rollbacks = simulation_statistics.rollback_reason[ROLLBACK_ROB_LEN];
     uint64_t saved_outer_rollbacks = simulation_statistics.ckpt_depth[0];
     uint64_t saved_inner_rollbacks = simulation_statistics.ckpt_depth[1];
@@ -108,7 +117,7 @@ static void check_live_chain(void *stack_top) {
     assert(!in_restore_memlog);
     for (size_t i = 0; i < DIFT_REG_TAGS_SIZE; i++) assert(dift_reg_tags[i] == i + 1);
     assert(chain_inner_restored == 1 && chain_faults == 1 && chain_bad_faults == 0);
-    assert(simulation_statistics.rollback_reason[ROLLBACK_SIGSEGV] == chain_signal_rollbacks + 1);
+    assert(simulation_statistics.rollback_reason[expected_bti_reason] == chain_signal_rollbacks + 1);
     assert(simulation_statistics.rollback_reason[ROLLBACK_ROB_LEN] == saved_budget_rollbacks + 1);
     assert(simulation_statistics.ckpt_depth[0] == saved_outer_rollbacks + 1);
     assert(simulation_statistics.ckpt_depth[1] == saved_inner_rollbacks + 1);
@@ -189,6 +198,20 @@ static int check_aarch64_bti(void *stack_top, bool live_chain) {
     assert(negative_probe(true));
 
     setup_signal_handler();
+#ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
+    if (test_active_backend) {
+        checkpoint_cnt = 0;
+        teapot_aarch64_bti_activate();
+        assert(teapot_bti_call_probe(teapot_bti_test_marker) == 42);
+        assert(teapot_bti_normal_resumes == 0);
+        // Two calls to the exact same invalid normal target must each fault,
+        // resume at PC (not PC+4), and leave protection enabled.
+        assert(teapot_bti_call_probe(teapot_bti_test_plain) == 42);
+        assert(teapot_bti_call_probe(teapot_bti_test_plain) == 42);
+        assert(teapot_bti_normal_resumes == 2);
+        fault_target = teapot_bti_test_plain;
+    }
+#endif
 #ifdef ENABLE_NESTED_SPECULATION
     if (live_chain) {
         check_live_chain(stack_top);
@@ -207,7 +230,7 @@ static int check_aarch64_bti(void *stack_top, bool live_chain) {
         for (size_t i = 0; i < DIFT_REG_TAGS_SIZE; i++) dift_reg_tags[i] = (uint8_t)(i + 1);
         memory_history_t *saved_history = memory_history_top;
         uint32_t *saved_guards = guard_list_top;
-        uint64_t saved_rollbacks = simulation_statistics.rollback_reason[ROLLBACK_SIGSEGV];
+        uint64_t saved_rollbacks = simulation_statistics.rollback_reason[expected_bti_reason];
         assert(checkpoint_bti_probe(stack_top, fault_target) == 42);
         assert(checkpoint_cnt == depth);
         assert(instruction_cnt == 17 + depth);
@@ -215,7 +238,7 @@ static int check_aarch64_bti(void *stack_top, bool live_chain) {
         assert(memory_history_top == saved_history && guard_list_top == saved_guards);
         assert(!in_restore_memlog);
         for (size_t i = 0; i < DIFT_REG_TAGS_SIZE; i++) assert(dift_reg_tags[i] == i + 1);
-        assert(simulation_statistics.rollback_reason[ROLLBACK_SIGSEGV] == saved_rollbacks + 1);
+        assert(simulation_statistics.rollback_reason[expected_bti_reason] == saved_rollbacks + 1);
     }
     checkpoint_cnt = 0;
     assert(munmap(page, (size_t)page_size) == 0);
@@ -236,3 +259,24 @@ int check_aarch64_bti_live_chain(void *stack_top) {
     return 77;
 #endif
 }
+
+#ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
+int check_aarch64_bti_backend(void *stack_top, bool live_chain) {
+#ifndef ENABLE_NESTED_SPECULATION
+    if (live_chain) return 77;
+#endif
+    test_active_backend = true;
+    expected_bti_reason = ROLLBACK_MALFORMED_INDIRECT_BR;
+    int result = check_aarch64_bti(stack_top, live_chain);
+    if (!result) {
+#ifdef ENABLE_NESTED_SPECULATION
+        assert(teapot_bti_rollbacks == (live_chain ? 1 : 2));
+#else
+        assert(teapot_bti_rollbacks == 1);
+#endif
+        assert(teapot_bti_normal_resumes == 2);
+        puts("Active BTI backend: same-PC normal resume and malformed-target rollback passed");
+    }
+    return result;
+}
+#endif

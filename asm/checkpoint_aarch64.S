@@ -7,6 +7,17 @@
 #define AARCH64_REPORT_SIMD_STATE_OFFSET (SCRATCHPAD_SIZE - 1040)
 #define AARCH64_REPORT_CALL_STACK_OFFSET (SCRATCHPAD_SIZE - 4096)
 
+// Trusted checkpoint continuations are not application indirect targets.
+// RET X16 has the same register/PC effect as BR X16 but no landing requirement.
+// Do not add BTI pads there, which would broaden the application target set.
+.macro TRUSTED_CONTINUATION
+#ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
+    ret x16
+#else
+    br x16
+#endif
+.endm
+
 .macro LOAD_ADDR reg, sym
 	ldr	\reg, =\sym
 .endm
@@ -151,7 +162,7 @@
 	ldr	x17, [x16, #24]
 	LOAD_ADDR x16, checkpoint_target_metadata + \target_offset
 	ldr	x16, [x16]
-	br	x16
+	TRUSTED_CONTINUATION
 .endm
 
 .macro RESTORE_FROM_CHECKPOINT_TARGET ckpt, target_offset
@@ -181,7 +192,7 @@
 	ldr	x19, [\ckpt, #CKPT_AARCH64_X19]
 	LOAD_ADDR x16, checkpoint_target_metadata + \target_offset
 	ldr	x16, [x16]
-	br	x16
+	TRUSTED_CONTINUATION
 .endm
 
 .macro RESTORE_FROM_CHECKPOINT ckpt
@@ -209,7 +220,7 @@
 	ldp	x28, x29, [\ckpt, #CKPT_AARCH64_X28]
 	ldr	x30, [\ckpt, #CKPT_AARCH64_X30]
 	ldr	x16, [\ckpt, #CKPT_RETURN_ADDRESS]
-	br	x16
+	TRUSTED_CONTINUATION
 .endm
 
 .macro DEF_RESTORE_CHECKPOINT name, reason
