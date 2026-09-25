@@ -21,4 +21,10 @@ teapot_bti_probe_valid:
 teapot_bti_probe_invalid:
     mov w0, #42
     ret
+    .global teapot_bti_probe_brk, teapot_bti_probe_hlt
+    .hidden teapot_bti_probe_brk, teapot_bti_probe_hlt
+teapot_bti_probe_brk:
+    brk #0x3d3e
+teapot_bti_probe_hlt:
+    hlt #0x3d3e
     .section .note.GNU-stack,"",%progbits

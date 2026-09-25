@@ -79,7 +79,11 @@ static void check_contexts(void) {
 }
 
 static void check_default_forwarding(void) {
-    const int signals[] = {SIGILL, SIGSEGV, SIGBUS, SIGFPE};
+    const int signals[] = {SIGILL, SIGSEGV, SIGBUS, SIGFPE,
+#ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
+        SIGTRAP,
+#endif
+    };
     for (size_t i = 0; i < sizeof(signals) / sizeof(signals[0]); i++) {
         pid_t child = fork();
         assert(child >= 0);

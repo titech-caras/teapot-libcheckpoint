@@ -29,6 +29,7 @@
 extern int checkpoint_bti_probe(void *stack_top, void *target);
 extern memory_history_t *memory_history_top;
 extern uint32_t *guard_list_top;
+extern uint64_t max_checkpoints;
 static uint64_t test_memory;
 static void *fault_target;
 static unsigned expected_bti_reason = ROLLBACK_SIGSEGV;
@@ -261,6 +262,106 @@ int check_aarch64_bti_live_chain(void *stack_top) {
 }
 
 #ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
+extern char teapot_bti_test_brk_data[], teapot_bti_test_hlt_data[];
+#define TRAP_BRANCHES(kind) \
+    extern char teapot_bti_test_##kind##_br0[], teapot_bti_test_##kind##_br16[], \
+        teapot_bti_test_##kind##_br17[], teapot_bti_test_##kind##_blr0[], \
+        teapot_bti_test_##kind##_blr16[], teapot_bti_test_##kind##_blr17[]
+TRAP_BRANCHES(brk);
+TRAP_BRANCHES(hlt);
+
+static int expected_trap_signal;
+static unsigned expected_btype;
+static uintptr_t expected_trap_pc;
+
+static void forwarded_trap(int sig, siginfo_t *info, void *context) {
+    ucontext_t *uc = context;
+    bool code_ok = sig == SIGTRAP ? info->si_code == TRAP_BRKPT :
+        info->si_code == ILL_ILLOPC || info->si_code == ILL_ILLOPN;
+    // In particular, neither saved BTYPE nor PC may be changed on forwarding.
+    _exit(sig == expected_trap_signal && code_ok &&
+        uc->uc_mcontext.pc == expected_trap_pc &&
+        (uintptr_t)info->si_addr == expected_trap_pc &&
+        ((uc->uc_mcontext.pstate >> 10) & 3) == expected_btype &&
+        checkpoint_cnt == 0 && teapot_bti_normal_resumes == 0 &&
+        teapot_bti_rollbacks == 0 ? 0 : 3);
+}
+
+int check_aarch64_bti_traps(void *stack_top) {
+    if (!(getauxval(AT_HWCAP2) & HWCAP2_BTI)) return 77;
+    const struct {void *branch, *target; int sig; unsigned btype;} cases[] = {
+#define CASES(kind, sig) \
+        {teapot_bti_test_##kind##_br0, teapot_bti_test_##kind##_data, sig, 3}, \
+        {teapot_bti_test_##kind##_br16, teapot_bti_test_##kind##_data, sig, 1}, \
+        {teapot_bti_test_##kind##_br17, teapot_bti_test_##kind##_data, sig, 1}, \
+        {teapot_bti_test_##kind##_blr0, teapot_bti_test_##kind##_data, sig, 2}, \
+        {teapot_bti_test_##kind##_blr16, teapot_bti_test_##kind##_data, sig, 2}, \
+        {teapot_bti_test_##kind##_blr17, teapot_bti_test_##kind##_data, sig, 2}
+        CASES(brk, SIGTRAP), CASES(hlt, SIGILL)
+#undef CASES
+    };
+    for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        // Fork before installing the parent's handler: saved dispositions must
+        // not accidentally be another copy of our own handler.
+        for (unsigned custom = 0; custom < 2; custom++) {
+            pid_t child = fork();
+            assert(child >= 0);
+            if (!child) {
+                checkpoint_cnt = 0;
+                expected_trap_signal = cases[i].sig;
+                expected_trap_pc = (uintptr_t)cases[i].target;
+                expected_btype = cases[i].btype;
+                struct sigaction action = {.sa_sigaction = forwarded_trap,
+                                           .sa_flags = SA_SIGINFO};
+                if (!custom) action = (struct sigaction){.sa_handler = SIG_DFL};
+                sigemptyset(&action.sa_mask);
+                assert(sigaction(cases[i].sig, &action, NULL) == 0);
+                setup_signal_handler();
+                teapot_aarch64_bti_activate();
+                teapot_bti_call_probe(cases[i].branch);
+                _exit(1);
+            }
+            int status;
+            assert(waitpid(child, &status, 0) == child);
+            if (custom) assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+            else assert(WIFSIGNALED(status) && WTERMSIG(status) == cases[i].sig);
+        }
+    }
+    setup_signal_handler();
+    teapot_aarch64_bti_activate();
+#ifdef ENABLE_NESTED_SPECULATION
+    const unsigned depths = 2;
+#else
+    const unsigned depths = 1;
+#endif
+    for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++)
+    for (unsigned depth = 0; depth < depths; depth++) {
+        checkpoint_cnt = depth;
+        // Repeated depth-zero calls can lower the next nested capacity through
+        // the scheduling heuristic. Explicitly exercise each requested depth.
+        max_checkpoints = MAX_CHECKPOINTS;
+        instruction_cnt = 17 + depth;
+        test_memory = UINT64_C(0x123456789abcdef);
+        for (size_t j = 0; j < DIFT_REG_TAGS_SIZE; j++) dift_reg_tags[j] = (uint8_t)(j + 1);
+        memory_history_t *saved_history = memory_history_top;
+        uint32_t *saved_guards = guard_list_top;
+        uint64_t saved_rollbacks = simulation_statistics.rollback_reason[ROLLBACK_MALFORMED_INDIRECT_BR];
+        uint64_t saved_bti_rollbacks = teapot_bti_rollbacks;
+        assert(checkpoint_bti_probe(stack_top, cases[i].branch) == 42);
+        assert(checkpoint_cnt == depth && instruction_cnt == 17 + depth);
+        assert(test_memory == UINT64_C(0x123456789abcdef));
+        assert(memory_history_top == saved_history && guard_list_top == saved_guards);
+        assert(!in_restore_memlog);
+        for (size_t j = 0; j < DIFT_REG_TAGS_SIZE; j++) assert(dift_reg_tags[j] == j + 1);
+        assert(simulation_statistics.rollback_reason[ROLLBACK_MALFORMED_INDIRECT_BR] == saved_rollbacks + 1);
+        assert(teapot_bti_rollbacks == saved_bti_rollbacks + 1);
+        assert(teapot_bti_normal_resumes == 0);
+    }
+    checkpoint_cnt = 0;
+    puts("BRK/HLT data landings: 24 ordinary forwarding cases and all checkpoint restores passed");
+    return 0;
+}
+
 int check_aarch64_bti_backend(void *stack_top, bool live_chain) {
 #ifndef ENABLE_NESTED_SPECULATION
     if (live_chain) return 77;

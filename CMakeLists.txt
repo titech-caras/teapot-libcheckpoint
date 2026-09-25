@@ -153,6 +153,10 @@ if(BUILD_TESTING)
                     COMMAND ${entry_test} bti-backend)
                 set_tests_properties(checkpoint_entry_${mode}_bti_backend PROPERTIES
                     TIMEOUT 10 SKIP_RETURN_CODE 77)
+                add_test(NAME checkpoint_entry_${mode}_bti_traps
+                    COMMAND ${entry_test} bti-traps)
+                set_tests_properties(checkpoint_entry_${mode}_bti_traps PROPERTIES
+                    TIMEOUT 30 SKIP_RETURN_CODE 77)
                 if(mode STREQUAL "nested")
                     add_test(NAME checkpoint_entry_nested_bti_backend_live_chain
                         COMMAND ${entry_test} bti-backend-live-chain)

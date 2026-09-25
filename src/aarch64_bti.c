@@ -31,6 +31,7 @@ extern char __teapot_bti_text_end[] __attribute__((weak));
 extern char __teapot_bti_transient_start[] __attribute__((weak));
 extern char __teapot_bti_transient_end[] __attribute__((weak));
 extern char teapot_bti_probe_valid[], teapot_bti_probe_invalid[];
+extern char teapot_bti_probe_brk[], teapot_bti_probe_hlt[];
 extern int teapot_bti_call_probe(void *);
 extern void restore_checkpoint_MALFORMED_INDIRECT_BR(void);
 
@@ -46,34 +47,60 @@ static void fail(const char *reason) {
     exit(78);
 }
 
-/* Superset of BTI-compatible instructions, across BR/BLR register variants
- * and SCTLR.BT settings. BRK/HLT take priority over a landing fault. */
+/* Non-trapping BTI-compatible instructions across BR/BLR register variants
+ * and SCTLR.BT settings. Every one must be a complete inserted marker. */
 static int hardware_landing(uint32_t word) {
     return word == BTI_JC || word == 0xd503245fU || word == 0xd503249fU ||
-           word == 0xd503233fU || word == 0xd503237fU ||
-           (word & 0xffe0001fU) == 0xd4200000U ||
+           word == 0xd503233fU || word == 0xd503237fU;
+}
+
+static int trap_landing(uint32_t word) {
+    return (word & 0xffe0001fU) == 0xd4200000U ||
            (word & 0xffe0001fU) == 0xd4400000U;
 }
 
-static int is_bti_fault(int sig, const siginfo_t *info, const ucontext_t *uc,
-                        uintptr_t start, uintptr_t end) {
+static int guarded_branch_context(const siginfo_t *info, const ucontext_t *uc,
+                                  uintptr_t start, uintptr_t end) {
     uintptr_t pc = uc->uc_mcontext.pc;
-    return sig == SIGILL && info &&
-           (info->si_code == ILL_ILLOPC || info->si_code == ILL_ILLOPN) &&
-           pc >= start && pc < end && !(pc & 3) &&
+    return info && pc >= start && pc < end && !(pc & 3) &&
            (uintptr_t)info->si_addr == pc && (uc->uc_mcontext.pstate & BTYPE_MASK);
 }
 
+static int illegal_instruction(int sig, const siginfo_t *info) {
+    return sig == SIGILL &&
+           (info->si_code == ILL_ILLOPC || info->si_code == ILL_ILLOPN);
+}
+
+static int trap_signal(uint32_t word, int sig, const siginfo_t *info) {
+    if ((word & 0xffe0001fU) == 0xd4200000U)
+        return sig == SIGTRAP && info->si_code == TRAP_BRKPT;
+    return (word & 0xffe0001fU) == 0xd4400000U && illegal_instruction(sig, info);
+}
+
+static uintptr_t probe_target;
 static void probe_signal(int sig, siginfo_t *info, void *context) {
-    uintptr_t target = (uintptr_t)teapot_bti_probe_invalid;
-    _exit(is_bti_fault(sig, info, context, target, target + 4) ? 0 : 3);
+    if (!guarded_branch_context(info, context, probe_target, probe_target + 4))
+        _exit(3);
+    uint32_t word = *(const uint32_t *)probe_target;
+    _exit((trap_landing(word) ? trap_signal(word, sig, info) :
+           illegal_instruction(sig, info)) ? 0 : 3);
 }
 
 bool teapot_aarch64_bti_signal(int sig, siginfo_t *info, void *context) {
     ucontext_t *uc = context;
-    if (!bti_active || !is_bti_fault(sig, info, uc,
+    if (!bti_active || !guarded_branch_context(info, uc,
             (uintptr_t)__teapot_bti_guard_start, (uintptr_t)__teapot_bti_guard_end))
         return false;
+    uint32_t word = *(const uint32_t *)uc->uc_mcontext.pc;
+    if (trap_landing(word)) {
+        /* BRK/HLT win over BTI, including data words with those encodings.
+         * They cannot execute past the target during simulation. At depth
+         * zero forward the ORIGINAL trap/context; this is not a BTI retry. */
+        if (!checkpoint_cnt || !trap_signal(word, sig, info))
+            return false;
+    } else if (!illegal_instruction(sig, info)) {
+        return false;
+    }
     // The saved PC is the destination, not the originating branch. Simulation
     // state, never a guess from the destination range, decides the slow path.
     uc->uc_mcontext.pstate &= ~BTYPE_MASK;
@@ -113,15 +140,20 @@ void teapot_aarch64_bti_activate(void) {
         const uint32_t *words = (const uint32_t *)pc;
         if (hardware_landing(words[0])) {
             if (words[0] != BTI_JC || words[1] != SECOND_MAGIC)
-                fail("normal text has an unmatched hardware landing (BTI/PAC/BRK/HLT)");
+                fail("normal text has an unmatched non-trapping hardware landing (BTI/PAC)");
             markers++;
         }
     }
     if (!markers)
         fail("normal text contains no transformed BTI markers");
-    uintptr_t probe = (uintptr_t)teapot_bti_probe_invalid;
-    if (probe < end || probe >= hi - 4 || (uintptr_t)teapot_bti_probe_valid < end)
+    const uintptr_t targets[] = {(uintptr_t)teapot_bti_probe_invalid,
+        (uintptr_t)teapot_bti_probe_brk, (uintptr_t)teapot_bti_probe_hlt};
+    uintptr_t valid = (uintptr_t)teapot_bti_probe_valid;
+    if (valid < end || valid > hi - 4 || (valid & 3))
         fail("enforcement probe is not isolated outside application targets");
+    for (size_t i = 0; i < sizeof targets / sizeof targets[0]; i++)
+        if (targets[i] < end || targets[i] > hi - 4 || (targets[i] & 3))
+            fail("enforcement probe is not isolated outside application targets");
     // Both code sequences must execute before page protection is enabled.
     if (teapot_bti_call_probe(teapot_bti_probe_valid) != 42 ||
             teapot_bti_call_probe(teapot_bti_probe_invalid) != 42)
@@ -129,23 +161,27 @@ void teapot_aarch64_bti_activate(void) {
     if (mprotect((void *)lo, hi - lo, PROT_READ | PROT_EXEC | PROT_BTI))
         fail("mprotect(PROT_BTI) failed");
     // Prove enforcement on the actual final normal-code mapping, not merely
-    // an anonymous scratch page or a property note. No checkpoint is active.
-    pid_t child = fork();
-    if (child < 0)
-        fail("cannot run enforcement probe");
-    if (!child) {
-        struct sigaction action = {.sa_sigaction = probe_signal, .sa_flags = SA_SIGINFO};
-        sigemptyset(&action.sa_mask);
-        if (sigaction(SIGILL, &action, NULL)) _exit(4);
-        if (teapot_bti_call_probe(teapot_bti_probe_valid) != 42) _exit(5);
-        teapot_bti_call_probe(teapot_bti_probe_invalid);
-        _exit(6);
+    // an anonymous scratch page or a property note. BRK/HLT must also deliver
+    // the trap-priority signal/context used above. No checkpoint is active.
+    for (size_t i = 0; i < sizeof targets / sizeof targets[0]; i++) {
+        pid_t child = fork();
+        if (child < 0)
+            fail("cannot run enforcement probe");
+        if (!child) {
+            probe_target = targets[i];
+            struct sigaction action = {.sa_sigaction = probe_signal, .sa_flags = SA_SIGINFO};
+            sigemptyset(&action.sa_mask);
+            if (sigaction(SIGILL, &action, NULL) || sigaction(SIGTRAP, &action, NULL)) _exit(4);
+            if (teapot_bti_call_probe(teapot_bti_probe_valid) != 42) _exit(5);
+            teapot_bti_call_probe((void *)probe_target);
+            _exit(6);
+        }
+        int status;
+        pid_t waited;
+        do { waited = waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
+        if (waited != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+            fail("actual normal mapping did not enforce invalid/trapping landings");
     }
-    int status;
-    pid_t waited;
-    do { waited = waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
-    if (waited != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
-        fail("actual normal mapping did not enforce invalid landings");
     bti_active = 1;
     fprintf(stderr, "[teapot-bti] active: %zu validated markers, %zu guarded bytes; range/return checks retained\n",
             markers, (size_t)(hi - lo));

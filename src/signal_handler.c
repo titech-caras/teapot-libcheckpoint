@@ -35,6 +35,10 @@ static struct saved_signal_action saved_signal_actions[] = {
     { .sig = SIGILL },
     { .sig = SIGFPE },
     { .sig = SIGBUS },
+#ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
+    /* BRK has exception priority over BTI at a guarded indirect target. */
+    { .sig = SIGTRAP },
+#endif
 };
 
 static struct saved_signal_action *saved_action_for_signal(int sig) {
@@ -173,6 +177,9 @@ void setup_signal_handler() {
     install_signal_handler(SIGILL, &sa);
     install_signal_handler(SIGFPE, &sa);
     install_signal_handler(SIGBUS, &sa);
+#ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
+    install_signal_handler(SIGTRAP, &sa);
+#endif
 
     signal(SIGUSR1, SIG_IGN);
 }
