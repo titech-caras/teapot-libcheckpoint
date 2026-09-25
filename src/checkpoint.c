@@ -524,6 +524,15 @@ LIBCHECKPOINT_RESTORE_PATH __attribute__((noreturn)) void restore_checkpoint(int
             checkpoint_metadata[checkpoint_cnt].return_address, checkpoint_cnt);
 #endif
 
+    restore_checkpoint_memlog();
+    restore_checkpoint_after_memlog();
+}
+
+LIBCHECKPOINT_RESTORE_PATH __attribute__((noreturn)) void restore_checkpoint_after_memlog() {
+    // Replay coverage only after the memory log is undone: speculation may have
+    // overwritten any program-visible memory, including the coverage runtime's
+    // own globals. Both the normal path and the signal handler's memlog restart
+    // continue here.
 #ifdef COVERAGE
     if (__sanitizer_cov_trace_pc_guard) {
         uint32_t *checkpoint_guard_top = checkpoint_metadata[checkpoint_cnt].guard_list_top;
@@ -551,11 +560,6 @@ LIBCHECKPOINT_RESTORE_PATH __attribute__((noreturn)) void restore_checkpoint(int
     guard_list_top = checkpoint_metadata[checkpoint_cnt].guard_list_top;
 #endif
 
-    restore_checkpoint_memlog();
-    restore_checkpoint_after_memlog();
-}
-
-LIBCHECKPOINT_RESTORE_PATH __attribute__((noreturn)) void restore_checkpoint_after_memlog() {
     instruction_cnt = checkpoint_metadata[checkpoint_cnt].instruction_cnt;
     // Protected tag storage must not go through an intercepted memcpy. Word
     // accesses keep this small copy inline even with loop optimization enabled.
