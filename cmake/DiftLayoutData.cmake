@@ -4,8 +4,7 @@ teapot_dift_layout(x64-la48
     ASAN_SHADOW_OFFSET 0x7fff8000
     APP_RANGES
         0x0:0x7fff8000
-        0x600000000000:0x800000000000
-    DEFAULT_FOR x64)
+        0x600000000000:0x800000000000)
 
 teapot_dift_layout(x64-la48-asan-new
     ARCH x64
@@ -19,7 +18,8 @@ teapot_dift_layout(x64-la48-asan-new
         # DIFT shadow therefore belongs in the disjoint 0x60... region.
         0x500000000000:0x600000000000
         # Shared objects and the process stack normally occupy 0x70....
-        0x700000000000:0x800000000000)
+        0x700000000000:0x800000000000
+    DEFAULT_FOR x64)
 
 teapot_dift_layout(x64-la57
     ARCH x64

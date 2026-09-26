@@ -216,11 +216,14 @@ if(BUILD_TESTING AND CHECKPOINT_ARCH_NAME STREQUAL "x64" AND TEAPOT_TEST_ASAN_AV
         COMMAND checkpoint_x64_xsave_report_test)
     set_tests_properties(
         checkpoint_x64_xsave_report PROPERTIES SKIP_RETURN_CODE 77)
-    # An incompatible ASan mapping fails in preinit, before main can return 77.
-    if(TEAPOT_DIFT_LAYOUT STREQUAL "x64-la48" AND
-       CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 13)
-        message(WARNING "Disabling the XSAVE report test: GCC 13+ ASan requires -DTEAPOT_DIFT_LAYOUT=x64-la48-asan-new")
-        set_tests_properties(checkpoint_x64_xsave_report PROPERTIES DISABLED TRUE)
+    if(TEAPOT_ENABLE_DIFT_RUNTIME)
+        include(cmake/AsanLayoutProbe.cmake)
+        teapot_check_asan_layout()
+        # An incompatible mapping fails in preinit, before main can return 77.
+        if(DEFINED TEAPOT_TEST_ASAN_LAYOUT_COMPATIBLE AND NOT TEAPOT_TEST_ASAN_LAYOUT_COMPATIBLE)
+            message(WARNING "Disabling the XSAVE report test: linked ASan is incompatible with DIFT layout ${TEAPOT_DIFT_LAYOUT}; see the configure probe output")
+            set_tests_properties(checkpoint_x64_xsave_report PROPERTIES DISABLED TRUE)
+        endif()
     endif()
 endif()
 
