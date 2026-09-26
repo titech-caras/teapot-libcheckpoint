@@ -12,10 +12,13 @@
 #include <unistd.h>
 
 #include "checkpoint.h"
+#include "signal_handler.h"
 
 extern uint64_t max_checkpoints;
 extern uintptr_t checkpoint_target_metadata[CHECKPOINT_TARGET_METADATA_SIZE / 8];
 extern int checkpoint_entry_probe(void *stack_top);
+extern int checkpoint_rollback_probe(void *stack_top);
+extern __attribute__((noreturn)) void restore_checkpoint_ROB_LEN(void);
 extern memory_history_t *memory_history_top;
 extern uint32_t *guard_list_top;
 extern void poison_protected_zone(void);
@@ -37,6 +40,55 @@ static uint32_t branch_counter;
 static void *stack_top;
 static unsigned poisoned_ranges;
 static sigjmp_buf memlog_fault_return;
+static void *queue_fault_page;
+static bool queue_force_fault;
+
+/* The assembly probe tail-enters this only after a real checkpoint. */
+__attribute__((noreturn)) void checkpoint_test_transient_body(void) {
+    memset(dift_reg_queued_tags, TAG_SECRET_INDIRECT, DIFT_REG_TAGS_SIZE);
+    memset(dift_reg_tags, TAG_SECRET, DIFT_REG_TAGS_SIZE);
+    /* The queue must be empty even if replay itself writes nonzero bytes. */
+    memory_history[0] = (memory_history_t){
+        .addr = dift_reg_queued_tags, .data = UINT64_MAX, .size = 8};
+    memory_history_top = memory_history + 1;
+    if (queue_force_fault) {
+        memory_history[1] = (memory_history_t){
+            .addr = queue_fault_page, .data = UINT64_MAX, .size = 8};
+        memory_history_top++;
+    }
+    restore_checkpoint_ROB_LEN();
+}
+
+static void check_queued_tags(void) {
+    size_t page_size = (size_t)sysconf(_SC_PAGESIZE);
+    queue_fault_page = mmap(NULL, page_size, PROT_READ,
+                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    assert(queue_fault_page != MAP_FAILED);
+    setup_signal_handler();
+    for (unsigned fault = 0; fault < 2; ++fault) {
+        queue_force_fault = fault;
+        for (unsigned depth = 0; depth < MAX_CHECKPOINTS; ++depth) {
+            checkpoint_cnt = depth;
+            max_checkpoints = MAX_CHECKPOINTS;
+            branch_counter = 0;
+            memory_history_top = memory_history;
+            guard_list_top = guard_list;
+            for (unsigned i = 0; i < DIFT_REG_TAGS_SIZE; ++i) {
+                dift_reg_tags[i] = (dift_tag_t)(i + 1);
+                dift_reg_queued_tags[i] = 0;
+            }
+            assert(checkpoint_rollback_probe(stack_top) == 1);
+            assert(checkpoint_cnt == depth && !in_restore_memlog);
+            assert(memory_history_top == memory_history);
+            for (unsigned i = 0; i < DIFT_REG_TAGS_SIZE; ++i) {
+                assert(dift_reg_tags[i] == i + 1);
+                assert(dift_reg_queued_tags[i] == 0);
+            }
+        }
+    }
+    checkpoint_cnt = 0;
+    assert(munmap(queue_fault_page, page_size) == 0);
+}
 
 static void memlog_fault_handler(int signal) {
     assert(signal == SIGSEGV || signal == SIGBUS);
@@ -250,6 +302,8 @@ int main(int argc, char **argv) {
         check_storage();
     else if (strcmp(argv[1], "memlog") == 0)
         check_memlog();
+    else if (strcmp(argv[1], "queued-tags") == 0)
+        check_queued_tags();
 #if defined(__aarch64__)
     else if (strcmp(argv[1], "report") == 0)
         assert(checkpoint_report_probe(stack_top) == 1);

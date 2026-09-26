@@ -567,9 +567,13 @@ LIBCHECKPOINT_RESTORE_PATH __attribute__((noreturn)) void restore_checkpoint_aft
     _Static_assert(DIFT_REG_TAGS_SIZE % sizeof(tag_word_t) == 0, "whole tag words");
     _Static_assert(CKPT_DIFT_REG_TAGS % _Alignof(tag_word_t) == 0, "aligned saved tags");
     volatile tag_word_t *dst = (volatile tag_word_t *)dift_reg_tags;
+    volatile tag_word_t *queued = (volatile tag_word_t *)dift_reg_queued_tags;
     const tag_word_t *src = (const tag_word_t *)checkpoint_metadata[checkpoint_cnt].dift_reg_tags;
     for (size_t i = 0; i < DIFT_REG_TAGS_SIZE / sizeof(tag_word_t); i++) {
         dst[i] = src[i];
+        // Queued tags belong to the aborted instruction, not the checkpoint.
+        // Clear them after memlog replay, which may itself touch this storage.
+        queued[i] = 0;
     }
 
     restore_checkpoint_registers();

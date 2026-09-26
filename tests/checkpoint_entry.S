@@ -67,6 +67,58 @@ checkpoint_entry_probe:
 #endif
 	.size	checkpoint_entry_probe, .-checkpoint_entry_probe
 
+	.globl	checkpoint_rollback_probe
+#if defined(__x86_64__)
+	.type	checkpoint_rollback_probe,@function
+checkpoint_rollback_probe:
+	leaq	checkpoint_test_transient_body(%rip), %rax
+	movq	%rax, checkpoint_target_metadata+CHECKPOINT_TARGET_TRAMPOLINE_ADDR(%rip)
+	leaq	.Lqueue_restored(%rip), %rax
+	movq	%rax, checkpoint_target_metadata+CHECKPOINT_TARGET_RETURN_ADDR(%rip)
+	jmp	make_checkpoint_x64
+.Lqueue_restored:
+	movl	$1, %eax
+	retq
+#elif defined(__aarch64__)
+	.type	checkpoint_rollback_probe,%function
+checkpoint_rollback_probe:
+	mov	x9, sp
+	mov	sp, x0
+	stp	x9, x30, [sp, #-16]!
+	sub	x9, sp, #(AARCH64_SHADOW_STACK_SIZE >> 12), lsl #12
+	stp	x16, x17, [x9, #AARCH64_SHADOW_STACK_CONTROL_OFFSET]
+	ldr	x17, =checkpoint_target_metadata
+	adr	x16, checkpoint_test_transient_body
+	str	x16, [x17, #CHECKPOINT_TARGET_TRAMPOLINE_ADDR]
+	adr	x16, .Lqueue_restored
+	str	x16, [x17, #CHECKPOINT_TARGET_RETURN_ADDR]
+	b	make_checkpoint_aarch64
+.Lqueue_restored:
+	ldp	x9, x30, [sp], #16
+	mov	sp, x9
+	mov	w0, #1
+	ret
+#elif defined(__riscv) && __riscv_xlen == 64
+	.option	push
+	.option	norelax
+	.type	checkpoint_rollback_probe,@function
+checkpoint_rollback_probe:
+	lla	a1, scratchpad + SCRATCHPAD_FIRST_SPILL_OFFSET
+	sd	t0, 0(a1)
+	sd	t1, 8(a1)
+	lla	t1, checkpoint_target_metadata
+	lla	t0, checkpoint_test_transient_body
+	sd	t0, CHECKPOINT_TARGET_TRAMPOLINE_ADDR(t1)
+	lla	t0, .Lqueue_restored
+	sd	t0, CHECKPOINT_TARGET_RETURN_ADDR(t1)
+	tail	make_checkpoint_riscv64
+.Lqueue_restored:
+	li	a0, 1
+	ret
+	.option	pop
+#endif
+	.size	checkpoint_rollback_probe, .-checkpoint_rollback_probe
+
 #if defined(__aarch64__)
 	.globl	checkpoint_report_probe
 	.type	checkpoint_report_probe,%function
