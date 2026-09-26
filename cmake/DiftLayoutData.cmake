@@ -58,7 +58,9 @@ teapot_dift_layout(aarch64-vma48
     ASAN_SHADOW_OFFSET 0x1000000000
     APP_RANGES
         0x0:0x400000000000
-        0xfffff0000000:0x1000000000000)
+        # Native ASan secondary allocations can sit below the top 256 MiB.
+        # Keep the same 4 GiB high-mapping headroom as the VMA39 profile.
+        0xffff00000000:0x1000000000000)
 
 teapot_dift_layout(riscv64-sv39
     ARCH riscv64
@@ -68,9 +70,10 @@ teapot_dift_layout(riscv64-sv39
         0x0:0xd55550000
         0xd55550000:0xeffffa000
         0xfffffa000:0x1555550000
-        # Leave the XOR partner of the high application window for its tags.
-        0x1555550000:0x1ff0000000
-        0x3ff0000000:0x4000000000)
+        # Reserve 4 GiB for native top-down/ASan secondary mappings. Shrink
+        # the low window too, keeping this high window's XOR partner disjoint.
+        0x1555550000:0x1f00000000
+        0x3f00000000:0x4000000000)
 
 teapot_dift_layout(riscv64-sv48
     ARCH riscv64
