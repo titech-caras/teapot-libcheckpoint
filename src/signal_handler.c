@@ -106,7 +106,9 @@ static void restart_restore_checkpoint_memlog(void *ucontext) {
     uintptr_t continuation = (uintptr_t)&restore_checkpoint_after_memlog;
 
 #if defined(__x86_64__)
-    uintptr_t sp = stack_top - sizeof(uintptr_t);
+    // restore_checkpoint_memlog returns into an ordinary C continuation.
+    // Leave RSP at 8 mod 16 after that RET, not at the aligned stack top.
+    uintptr_t sp = stack_top - 2 * sizeof(uintptr_t);
     *(uintptr_t *)sp = continuation;
     uc->uc_mcontext.gregs[REG_RSP] = (greg_t)sp;
 #elif defined(__aarch64__)

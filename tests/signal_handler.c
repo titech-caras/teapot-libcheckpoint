@@ -61,9 +61,13 @@ static void check_contexts(void) {
             if (replay) {
                 uintptr_t top = (uintptr_t)scratchpad + SCRATCHPAD_SIZE;
 #if defined(__x86_64__)
-                assert(context.uc_mcontext.gregs[REG_RSP] == top - sizeof(uintptr_t));
-                assert(*(uintptr_t *)(top - sizeof(uintptr_t)) ==
+                uintptr_t sp = top - 2 * sizeof(uintptr_t);
+                assert(context.uc_mcontext.gregs[REG_RSP] == sp);
+                assert(*(uintptr_t *)sp ==
                        (uintptr_t)&restore_checkpoint_after_memlog);
+                // RET enters the C continuation with the usual return-slot
+                // offset, so its calls (including coverage) stay ABI-aligned.
+                assert((sp + sizeof(uintptr_t)) % 16 == 8);
 #elif defined(__aarch64__)
                 assert(context.uc_mcontext.sp == top);
                 assert(context.uc_mcontext.regs[30] ==
