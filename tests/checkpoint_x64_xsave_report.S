@@ -11,7 +11,13 @@ checkpoint_x64_xsave_report_probe:
 	movq %rax, %xmm15
 	movabsq $0x1111222233334444, %rsi
 	movl $0x55aa, %edx
+	std
 	callq report_gadget_KASPER_CACHE
+	pushfq
+	popq %rax
+	cld
+	testq $0x400, %rax
+	jz .Lxsave_report_mismatch
 	movq %xmm0, %rax
 	movabsq $0x0123456789abcdef, %rcx
 	cmpq %rcx, %rax

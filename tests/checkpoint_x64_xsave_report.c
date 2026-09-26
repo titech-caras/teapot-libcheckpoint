@@ -1,5 +1,7 @@
 #include "checkpoint.h"
 
+#undef NDEBUG
+#include <assert.h>
 #include <cpuid.h>
 #include <sanitizer/asan_interface.h>
 #include <stdbool.h>
@@ -11,6 +13,14 @@
 extern void report_gadget_KASPER_CACHE(
     uint64_t gadget_addr, uint64_t access_addr, dift_tag_t tag);
 extern int checkpoint_x64_xsave_report_probe(uint64_t gadget_addr);
+extern void __real_report_gadget_x64_impl_KASPER_CACHE(uint64_t, uint64_t, dift_tag_t);
+
+void __wrap_report_gadget_x64_impl_KASPER_CACHE(uint64_t pc, uint64_t addr, dift_tag_t tag) {
+    uint64_t flags;
+    __asm__ volatile("pushfq; popq %0; cld" : "=r"(flags) :: "cc");
+    assert(!(flags & 0x400));
+    __real_report_gadget_x64_impl_KASPER_CACHE(pc, addr, tag);
+}
 
 /* Normal instrumented links provide these coverage-section boundaries. */
 uint32_t __guard_start__teapot__[1];

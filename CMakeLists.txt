@@ -124,6 +124,12 @@ if(BUILD_TESTING)
             ${entry_runtime_sources})
         teapot_configure_checkpoint_target(${entry_test})
         target_compile_definitions(${entry_test} PRIVATE TIME)
+        if(CHECKPOINT_ARCH_NAME STREQUAL "x64")
+            target_sources(${entry_test} PRIVATE tests/checkpoint_x64_df.c tests/checkpoint_x64_df.S)
+            target_link_options(${entry_test} PRIVATE -Wl,--wrap=restore_checkpoint)
+            add_test(NAME checkpoint_entry_${mode}_df COMMAND ${entry_test} df)
+            set_tests_properties(checkpoint_entry_${mode}_df PROPERTIES TIMEOUT 10)
+        endif()
         if(mode STREQUAL "nested")
             target_compile_definitions(${entry_test} PRIVATE ENABLE_NESTED_SPECULATION)
         endif()
@@ -203,6 +209,8 @@ if(BUILD_TESTING AND CHECKPOINT_ARCH_NAME STREQUAL "x64" AND TEAPOT_TEST_ASAN_AV
     target_link_libraries(checkpoint_x64_xsave_report_test PRIVATE checkpoint)
     target_compile_options(checkpoint_x64_xsave_report_test PRIVATE -fno-pie)
     target_link_options(checkpoint_x64_xsave_report_test PRIVATE -no-pie -fsanitize=address)
+    target_link_options(checkpoint_x64_xsave_report_test PRIVATE
+        -Wl,--wrap=report_gadget_x64_impl_KASPER_CACHE)
     add_test(
         NAME checkpoint_x64_xsave_report
         COMMAND checkpoint_x64_xsave_report_test)

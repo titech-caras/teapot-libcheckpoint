@@ -18,6 +18,9 @@ extern uint64_t max_checkpoints;
 extern uintptr_t checkpoint_target_metadata[CHECKPOINT_TARGET_METADATA_SIZE / 8];
 extern int checkpoint_entry_probe(void *stack_top);
 extern int checkpoint_rollback_probe(void *stack_top);
+#if defined(__x86_64__)
+extern void check_x64_df(void);
+#endif
 extern __attribute__((noreturn)) void restore_checkpoint_ROB_LEN(void);
 extern memory_history_t *memory_history_top;
 extern uint32_t *guard_list_top;
@@ -304,6 +307,10 @@ int main(int argc, char **argv) {
         check_memlog();
     else if (strcmp(argv[1], "queued-tags") == 0)
         check_queued_tags();
+#if defined(__x86_64__)
+    else if (strcmp(argv[1], "df") == 0)
+        check_x64_df();
+#endif
 #if defined(__aarch64__)
     else if (strcmp(argv[1], "report") == 0)
         assert(checkpoint_report_probe(stack_top) == 1);

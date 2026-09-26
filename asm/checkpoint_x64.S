@@ -16,17 +16,15 @@
 
 .macro SAVE_BOOTSTRAP_REGS
 	pushq	%rax
-	lahf
-	seto	%al
-	pushq	%rax
+	/* LAHF/SETO omits DF. Keep full flags on the private stack. */
+	pushfq
 	pushq	%rbx
+	cld
 .endm
 
 .macro RESTORE_BOOTSTRAP_REGS_AND_JUMP target
 	popq	%rbx
-	popq	%rax
-	addb	$0x7f, %al
-	sahf
+	popfq
 	popq	%rax
 	movq	old_rsp, %rsp
 	jmpq	*\target
@@ -167,7 +165,6 @@
 	movq	CKPT_RDX(\ckpt), %rdx
 	movq	CKPT_RSI(\ckpt), %rsi
 	movq	CKPT_RDI(\ckpt), %rdi
-	movq	CKPT_RSP(\ckpt), %rsp
 	movq	CKPT_RBP(\ckpt), %rbp
 	movq	CKPT_R8(\ckpt), %r8
 	movq	CKPT_R9(\ckpt), %r9
@@ -181,9 +178,10 @@
 
 .macro RESTORE_FLAGS_RAX_RBX_AND_JUMP ckpt
 	movq	\ckpt, %rbx
-	movq	CKPT_FLAGS(%rbx), %rax
-	addb	$0x7f, %al
-	sahf
+	/* POPFQ must use the private stack, not overwrite the restored red zone. */
+	pushq	CKPT_FLAGS(%rbx)
+	popfq
+	movq	CKPT_RSP(%rbx), %rsp
 	movq	CKPT_RETURN_ADDRESS(%rbx), %rax
 	movq	%rax, checkpoint_target_metadata+8
 	movq	CKPT_RAX(%rbx), %rax
@@ -198,6 +196,7 @@
 restore_checkpoint_\name:
 	.cfi_startproc
 	X64_SWITCH_TO_SCRATCHPAD_STACK
+	cld	/* Every rollback reason enters C with the ABI direction flag. */
 	movq	$\reason, %rdi
 	jmp	restore_checkpoint
 .Lrestore_checkpoint_\name\()_end:
@@ -217,9 +216,12 @@ DEF_RESTORE_CHECKPOINT MALFORMED_INDIRECT_BR, ROLLBACK_MALFORMED_INDIRECT_BR
 	.type	report_gadget_\type,@function
 report_gadget_\type:
 	.cfi_startproc
-	pushq	%rbx
+	pushfq
 	.cfi_def_cfa_offset 16
-	.cfi_offset %rbx, -16
+	pushq	%rbx
+	.cfi_def_cfa_offset 24
+	.cfi_offset %rbx, -24
+	cld
 	movq	%rsp, %rbx
 	.cfi_def_cfa_register %rbx
 	movq	%rdx, scratchpad+X64_REPORT_TAG_OFFSET
@@ -233,8 +235,10 @@ report_gadget_\type:
 	movq	%rbx, %rsp
 	.cfi_def_cfa_register %rsp
 	popq	%rbx
-	.cfi_def_cfa_offset 8
+	.cfi_def_cfa_offset 16
 	.cfi_restore %rbx
+	popfq
+	.cfi_def_cfa_offset 8
 	retq
 .Lreport_gadget_\type\()_end:
 	.size	report_gadget_\type, .Lreport_gadget_\type\()_end-report_gadget_\type
