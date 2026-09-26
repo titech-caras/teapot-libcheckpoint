@@ -128,8 +128,9 @@ static uint64_t checkpoint_read_timer() {
     asm volatile("mrs %0, cntvct_el0" : "=r"(value));
     return value;
 #elif defined(__riscv) && __riscv_xlen == 64
+    // The time CSR, like cntvct_el0: Linux 6.6 and later trap user reads of the cycle counter.
     uint64_t value;
-    asm volatile("rdcycle %0" : "=r"(value));
+    asm volatile("rdtime %0" : "=r"(value));
     return value;
 #else
 #error "Unsupported libcheckpoint timer architecture"

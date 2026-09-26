@@ -23,8 +23,8 @@
 	addi	\reg, \reg, \offset
 .endm
 
-.macro RDCYCLE_STAT result, addr, prev
-	rdcycle	\result
+.macro RDTIME_STAT result, addr, prev
+	rdtime	\result
 	LOAD_ADDR \addr, last_rdtsc
 	ld	\prev, 0(\addr)
 	sub	\prev, \result, \prev
@@ -407,7 +407,7 @@ make_checkpoint_riscv64:
 	add	t0, t0, t1
 
 #ifdef TIME
-	RDCYCLE_STAT t1, t3, t4
+	RDTIME_STAT t1, t3, t4
 	LOAD_ADDR t3, checkpoint_cnt
 	ld	t3, 0(t3)
 	li	t4, 0
@@ -466,7 +466,7 @@ make_checkpoint_riscv64:
 #endif
 
 #ifdef TIME
-	RDCYCLE_STAT t1, t3, t4
+	RDTIME_STAT t1, t3, t4
 	LOAD_ADDR_OFFSET t3, simulation_statistics, 16
 	ld	t4, 0(t3)
 	add	t4, t4, t1
@@ -499,7 +499,7 @@ restore_checkpoint_registers:
 
 #ifdef TIME
 	mv	s0, t0
-	RDCYCLE_STAT t1, t3, t4
+	RDTIME_STAT t1, t3, t4
 	LOAD_ADDR_OFFSET t3, simulation_statistics, 24
 	ld	t4, 0(t3)
 	add	t4, t4, t1
