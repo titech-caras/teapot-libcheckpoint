@@ -157,6 +157,73 @@ static void check_signal_return(void) {
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
+static volatile sig_atomic_t application_calls;
+static void replacement_handler(int sig) {
+    assert(sig == SIGILL);
+    ++application_calls;
+}
+
+static void info_handler(int sig, siginfo_t *info, void *context) {
+    sigset_t mask;
+    assert(sig == SIGILL && info->si_signo == SIGILL && context);
+    assert(sigprocmask(SIG_SETMASK, NULL, &mask) == 0);
+    assert(sigismember(&mask, SIGINT) == 1); /* interrupted mask */
+    assert(sigismember(&mask, SIGUSR2) == 1); /* application sa_mask */
+    assert(sigismember(&mask, SIGILL) == 0); /* SA_NODEFER */
+    ++application_calls;
+}
+
+static void check_post_setup_registration(void) {
+    signal(SIGILL, SIG_DFL);
+    setup_signal_handler();
+    assert(signal__teapot_wrapper__(SIGILL, replacement_handler) == SIG_DFL);
+    assert(signal__teapot_wrapper__(SIGILL, SIG_IGN) == replacement_handler);
+    assert(signal__teapot_wrapper__(SIGILL, replacement_handler) == SIG_IGN);
+    struct sigaction actual, queried;
+    assert(sigaction(SIGILL, NULL, &actual) == 0);
+    assert(actual.sa_sigaction == signal_handler && (actual.sa_flags & SA_SIGINFO));
+    assert(sigaction__teapot_wrapper__(SIGILL, NULL, &queried) == 0);
+    assert(queried.sa_handler == replacement_handler);
+    /* Repeat setup must not replace the saved handler with Teapot itself. */
+    setup_signal_handler();
+    raise(SIGILL);
+    assert(application_calls == 1);
+
+    sigset_t original, mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGINT);
+    assert(sigprocmask(SIG_SETMASK, &mask, &original) == 0);
+    struct sigaction action = {
+        .sa_sigaction = info_handler, .sa_flags = SA_SIGINFO | SA_NODEFER | SA_RESETHAND
+    };
+    sigemptyset(&action.sa_mask);
+    sigaddset(&action.sa_mask, SIGUSR2);
+    assert(sigaction__teapot_wrapper__(SIGILL, &action, &queried) == 0);
+    assert(queried.sa_handler == replacement_handler);
+    raise(SIGILL);
+    assert(application_calls == 2);
+    assert(sigaction__teapot_wrapper__(SIGILL, NULL, &queried) == 0);
+    assert(queried.sa_handler == SIG_DFL);
+    assert(sigprocmask(SIG_SETMASK, &original, NULL) == 0);
+
+    /* A handler installed after startup must never receive a simulated fault. */
+    pid_t child = fork();
+    assert(child >= 0);
+    if (child == 0) {
+        sigemptyset(&mask);
+        sigaddset(&mask, SIGINT);
+        assert(sigprocmask(SIG_SETMASK, &mask, NULL) == 0);
+        assert(signal__teapot_wrapper__(SIGILL, replacement_handler) == SIG_DFL);
+        expect_redirect = true;
+        checkpoint_cnt = 1;
+        raise(SIGILL);
+        _exit(1);
+    }
+    int status;
+    assert(waitpid(child, &status, 0) == child);
+    assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
 int main(int argc, char **argv) {
     assert(argc == 2);
     if (strcmp(argv[1], "context") == 0)
@@ -166,6 +233,8 @@ int main(int argc, char **argv) {
         check_forwarding_stack_budget();
     } else if (strcmp(argv[1], "redirect") == 0)
         check_signal_return();
+    else if (strcmp(argv[1], "registration") == 0)
+        check_post_setup_registration();
     else
         return 1;
     return 0;

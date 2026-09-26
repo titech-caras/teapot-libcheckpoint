@@ -3,6 +3,7 @@
 #include "checkpoint.h"
 
 #include <stdbool.h>
+#include <errno.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,8 +54,9 @@ static struct saved_signal_action *saved_action_for_signal(int sig) {
 static void invoke_saved_signal_action(int sig, siginfo_t *info, void *ucontext) {
     struct saved_signal_action *saved = saved_action_for_signal(sig);
     const struct sigaction default_action = { .sa_handler = SIG_DFL };
-    const struct sigaction *action = saved && saved->valid ?
-        &saved->action : &default_action;
+    // A handler may replace itself. Snapshot its disposition before calling it.
+    const struct sigaction snapshot = saved && saved->valid ? saved->action : default_action;
+    const struct sigaction *action = &snapshot;
     if (action->sa_handler == SIG_IGN) {
         return;
     } else if (action->sa_handler == SIG_DFL) {
@@ -62,10 +64,23 @@ static void invoke_saved_signal_action(int sig, siginfo_t *info, void *ucontext)
         // Delivery resumes with the original disposition when this handler
         // returns and the kernel restores the caller's signal mask.
         raise(sig);
-    } else if (action->sa_flags & SA_SIGINFO) {
-        action->sa_sigaction(sig, info, ucontext);
     } else {
-        action->sa_handler(sig);
+        if ((action->sa_flags & SA_RESETHAND) && saved)
+            saved->action = default_action;
+        // Teapot blocks all signals while editing the fault context, but an
+        // application handler must observe its own mask and NODEFER contract.
+        sigset_t mask = ((ucontext_t *)ucontext)->uc_sigmask, previous;
+        for (int number = 1; number < NSIG; ++number)
+            if (sigismember(&action->sa_mask, number) == 1)
+                sigaddset(&mask, number);
+        if (!(action->sa_flags & SA_NODEFER))
+            sigaddset(&mask, sig);
+        sigprocmask(SIG_SETMASK, &mask, &previous);
+        if (action->sa_flags & SA_SIGINFO)
+            action->sa_sigaction(sig, info, ucontext);
+        else
+            action->sa_handler(sig);
+        sigprocmask(SIG_SETMASK, &previous, NULL);
     }
 }
 
@@ -126,10 +141,67 @@ void signal_handler(int sig, siginfo_t *info, void *ucontext) {
 
 static void install_signal_handler(int sig, const struct sigaction *action) {
     struct saved_signal_action *saved = saved_action_for_signal(sig);
-    sigaction(sig, action, saved ? &saved->action : NULL);
-    if (saved) {
+    struct sigaction previous;
+    if (sigaction(sig, action, &previous) != 0) {
+        perror("sigaction");
+        abort();
+    }
+    // Re-enabling the runtime must not chain its handler back to itself.
+    if (saved && !((previous.sa_flags & SA_SIGINFO) &&
+                   previous.sa_sigaction == signal_handler)) {
+        saved->action = previous;
         saved->valid = true;
     }
+}
+
+int sigaction__teapot_wrapper__(int sig, const struct sigaction *action,
+                                struct sigaction *old_action) {
+    struct saved_signal_action *saved = saved_action_for_signal(sig);
+    if (!saved || !saved->valid)
+        return sigaction(sig, action, old_action);
+
+    // Only calls from rewritten code use this entry. Runtime/libc/ASan calls
+    // still reach libc directly, avoiding interposition recursion at startup.
+    sigset_t all, previous_mask;
+    sigfillset(&all);
+    if (sigprocmask(SIG_BLOCK, &all, &previous_mask) != 0)
+        return -1;
+    const struct sigaction previous_action = saved->action;
+    int result = 0;
+    if (action) {
+        const struct sigaction next_action = *action;
+        struct sigaction runtime_action = {
+            .sa_sigaction = signal_handler,
+            .sa_flags = SA_ONSTACK | SA_SIGINFO | (action->sa_flags & SA_RESTART)
+        };
+        sigfillset(&runtime_action.sa_mask);
+        result = sigaction(sig, &runtime_action, NULL);
+        if (result == 0)
+            saved->action = next_action;
+    }
+    if (result == 0 && old_action)
+        *old_action = previous_action;
+    const int saved_errno = errno;
+    sigprocmask(SIG_SETMASK, &previous_mask, NULL);
+    errno = saved_errno;
+    return result;
+}
+
+teapot_signal_function signal__teapot_wrapper__(int sig, teapot_signal_function handler) {
+    struct saved_signal_action *saved = saved_action_for_signal(sig);
+    if (!saved || !saved->valid)
+        return signal(sig, handler);
+    if (handler == SIG_ERR) {
+        errno = EINVAL;
+        return SIG_ERR;
+    }
+    // Linux/glibc's default signal() interface uses BSD semantics.
+    struct sigaction action = { .sa_handler = handler, .sa_flags = SA_RESTART }, previous;
+    sigemptyset(&action.sa_mask);
+    sigaddset(&action.sa_mask, sig);
+    if (sigaction__teapot_wrapper__(sig, &action, &previous) != 0)
+        return SIG_ERR;
+    return previous.sa_handler;
 }
 
 void setup_signal_handler() {
