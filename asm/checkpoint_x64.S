@@ -396,7 +396,8 @@ restore_checkpoint_registers:
 
 	.bss
 	.globl	checkpoint_target_metadata
-	.p2align	3, 0x0
+	/* The x64 ABI gives arrays of at least 16 bytes 16-byte alignment. */
+	.p2align	4, 0x0
 	.type	checkpoint_target_metadata,@object
 checkpoint_target_metadata:
 	.zero	CHECKPOINT_TARGET_METADATA_SIZE

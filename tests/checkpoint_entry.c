@@ -286,6 +286,9 @@ int main(int argc, char **argv) {
     assert(argc == 2);
     struct rlimit core_limit = {0, 0};
     assert(setrlimit(RLIMIT_CORE, &core_limit) == 0);
+#if defined(__x86_64__)
+    assert((uintptr_t)checkpoint_target_metadata % 16 == 0);
+#endif
 #if defined(__aarch64__)
     size_t stack_size = 2 * AARCH64_SHADOW_STACK_SIZE;
     void *mapping = mmap(NULL, stack_size, PROT_READ | PROT_WRITE,
