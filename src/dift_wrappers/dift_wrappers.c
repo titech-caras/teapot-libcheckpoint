@@ -21,8 +21,6 @@ extern size_t _IO_getline(FILE *stream, char *buffer, size_t size, int delimiter
 
 // TODO: eventually move this into an independent project and make the interface compatible with dfsan
 
-#define DIFT_WRAPPER(function_name, return_type, ...) return_type function_name##__dift_wrapper__(__VA_ARGS__)
-
 // Taint source: read.
 DIFT_WRAPPER(read, ssize_t, int fd, void *buf, size_t count) {
     ssize_t read_size = read(fd, buf, count);

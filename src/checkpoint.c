@@ -418,7 +418,6 @@ void print_statistics() {
     puts("");
     puts("Rollbacks");
     fprintf(stderr, "\tRollback ROB_LEN: %lu\n", simulation_statistics.rollback_reason[ROLLBACK_ROB_LEN]);
-    //fprintf(stderr, "\tRollback ASAN: %lu\n", simulation_statistics.rollback_reason[ROLLBACK_ASAN]);
     fprintf(stderr, "\tRollback SIGSEGV: %lu\n", simulation_statistics.rollback_reason[ROLLBACK_SIGSEGV]);
     fprintf(stderr, "\tRollback EXT_LIB: %lu\n", simulation_statistics.rollback_reason[ROLLBACK_EXT_LIB]);
     fprintf(stderr, "\tRollback MALFORMED_INDIRECT_BR: %lu\n", simulation_statistics.rollback_reason[ROLLBACK_MALFORMED_INDIRECT_BR]);
@@ -461,9 +460,7 @@ static void libcheckpoint_prepare_runtime(int argc, char **argv) {
 #endif
 
 #ifdef COVERAGE
-    if (__sanitizer_cov_trace_pc_guard_init) {
-        __sanitizer_cov_trace_pc_guard_init(&guard_start, &guard_end);
-    }
+    __sanitizer_cov_trace_pc_guard_init(&guard_start, &guard_end);
 #endif
 
     poison_protected_zone();
@@ -535,27 +532,23 @@ LIBCHECKPOINT_RESTORE_PATH __attribute__((noreturn)) void restore_checkpoint_aft
     // own globals. Both the normal path and the signal handler's memlog restart
     // continue here.
 #ifdef COVERAGE
-    if (__sanitizer_cov_trace_pc_guard) {
-        uint32_t *checkpoint_guard_top = checkpoint_metadata[checkpoint_cnt].guard_list_top;
-        if (checkpoint_guard_top < &guard_list[0] ||
-                checkpoint_guard_top > &guard_list[GUARD_LIST_LEN]) {
-            checkpoint_guard_top = &guard_list[0];
-        }
-        if (guard_list_top < checkpoint_guard_top ||
-                guard_list_top > &guard_list[GUARD_LIST_LEN]) {
-            guard_list_top = checkpoint_guard_top;
-        }
-        size_t guard_count = (size_t)(&guard_end - &guard_start);
-        while (guard_list_top > checkpoint_guard_top) {
-            guard_list_top--;
-            uint32_t guard_idx = *guard_list_top;
-            if (guard_idx >= guard_count) continue;
-            uint32_t *guard_ptr = &guard_start + guard_idx;
-            if (!*guard_ptr) continue;
-            __sanitizer_cov_trace_pc_guard(guard_ptr);
-        }
-    } else {
-        guard_list_top = checkpoint_metadata[checkpoint_cnt].guard_list_top;
+    uint32_t *checkpoint_guard_top = checkpoint_metadata[checkpoint_cnt].guard_list_top;
+    if (checkpoint_guard_top < &guard_list[0] ||
+            checkpoint_guard_top > &guard_list[GUARD_LIST_LEN]) {
+        checkpoint_guard_top = &guard_list[0];
+    }
+    if (guard_list_top < checkpoint_guard_top ||
+            guard_list_top > &guard_list[GUARD_LIST_LEN]) {
+        guard_list_top = checkpoint_guard_top;
+    }
+    size_t guard_count = (size_t)(&guard_end - &guard_start);
+    while (guard_list_top > checkpoint_guard_top) {
+        guard_list_top--;
+        uint32_t guard_idx = *guard_list_top;
+        if (guard_idx >= guard_count) continue;
+        uint32_t *guard_ptr = &guard_start + guard_idx;
+        if (!*guard_ptr) continue;
+        __sanitizer_cov_trace_pc_guard(guard_ptr);
     }
 #else
     guard_list_top = checkpoint_metadata[checkpoint_cnt].guard_list_top;

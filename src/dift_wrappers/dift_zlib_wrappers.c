@@ -5,8 +5,6 @@
 #include <stdlib.h>
 #include <zlib.h>
 
-#define DIFT_WRAPPER(function_name, return_type, ...) return_type function_name##__dift_wrapper__(__VA_ARGS__)
-
 /* Wrappers execute outside simulation, under the runtime's single-thread
  * contract. Keep provenance separate from zlib's opaque state and callbacks.
  * A stream-lifetime union is conservative, not byte-exact decompression DIFT. */

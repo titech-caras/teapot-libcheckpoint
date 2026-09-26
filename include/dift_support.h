@@ -158,4 +158,7 @@ void dift_set_mem_tags(void *addr, dift_tag_t tag, size_t len);
 void dift_copy_mem_tags(void *dest, const void *src, size_t len);
 void dift_move_mem_tags(void *dest, const void *src, size_t len);
 void dift_taint_args(int argc, char **argv);
+
+// Defines function_name__dift_wrapper__, which Teapot calls in place of function_name.
+#define DIFT_WRAPPER(function_name, return_type, ...) return_type function_name##__dift_wrapper__(__VA_ARGS__)
 #endif

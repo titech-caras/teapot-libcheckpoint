@@ -37,11 +37,6 @@
 #define USE_BRANCH_EXEC_COUNT
 #endif
 
-#define SCRATCHPAD_TOP "scratchpad+" STR(SCRATCHPAD_SIZE - 8)
-
-#define SWITCH_TO_SCRATCHPAD_STACK "mov %rsp, old_rsp\n" "lea " SCRATCHPAD_TOP ", %rsp\n"
-#define SWITCH_TO_ORIGINAL_STACK "mov old_rsp, %rsp\n"
-
 #define CHECKPOINT_TARGET_TRAMPOLINE_ADDR 0
 #define CHECKPOINT_TARGET_RETURN_ADDR 8
 #define CHECKPOINT_TARGET_BRANCH_COUNTER_ADDR 16
@@ -174,7 +169,6 @@
 #endif
 
 #define ROLLBACK_ROB_LEN 0
-//#define ROLLBACK_ASAN 1
 #define ROLLBACK_SIGSEGV 2
 #define ROLLBACK_EXT_LIB 3
 #define ROLLBACK_MALFORMED_INDIRECT_BR 4
@@ -206,8 +200,6 @@ typedef struct checkpoint_register_state {
     uint64_t x24, x25, x26, x27, x28, x29, x30, x31;
 #endif
 } checkpoint_register_state_t;
-
-typedef checkpoint_register_state_t general_register_state_t;
 
 typedef __attribute__((aligned(CHECKPOINT_METADATA_SIZE))) struct checkpoint_metadata {
     checkpoint_register_state_t registers;
@@ -241,12 +233,6 @@ typedef __attribute__((aligned(64))) struct xsave_area {
 
 typedef __attribute__((aligned(16))) uint8_t scratchpad_t[SCRATCHPAD_SIZE];
 
-/*#define GADGET_SPECFUZZ_ASAN_READ 1
-#define GADGET_SPECFUZZ_ASAN_WRITE 3
-#define GADGET_SIGSEGV 11
-#define GADGET_SPECTAINT_BCB 21
-#define GADGET_SPECTAINT_BCBS 22
-*/
 #define GADGET_KASPER_MDS 41
 #define GADGET_KASPER_CACHE 42
 #define GADGET_KASPER_PORT 43
