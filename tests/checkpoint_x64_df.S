@@ -5,6 +5,10 @@
 	.type checkpoint_df_probe,@function
 checkpoint_df_probe:
 	pushq %rbx
+	leaq make_checkpoint_x64(%rip), %r8
+	leaq make_checkpoint_df(%rip), %r9
+	testq $0x400, %rdi
+	cmovnz %r9, %r8
 	leaq .Ldf_transient(%rip), %rax
 	movq %rax, checkpoint_target_metadata+CHECKPOINT_TARGET_TRAMPOLINE_ADDR(%rip)
 	leaq .Ldf_restored(%rip), %rax
@@ -19,7 +23,7 @@ checkpoint_df_probe:
 	pushq %rax
 	popfq
 	movq $0x45678901, -16(%rsp)
-	jmp make_checkpoint_x64
+	jmp *%r8
 .Ldf_transient:
 	pushfq
 	popq checkpoint_df_seen+8(%rip)

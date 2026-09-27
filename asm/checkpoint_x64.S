@@ -14,33 +14,66 @@
 	leaq	scratchpad+SCRATCHPAD_SIZE-8, %rsp
 .endm
 
-.macro SAVE_BOOTSTRAP_REGS
+.macro SAVE_BOOTSTRAP_REGS df=0
 	pushq	%rax
-	/* LAHF/SETO omits DF. Keep full flags on the private stack. */
-	pushfq
+	lahf
+	seto	%al
+	movzwl	%ax, %eax
+	pushq	%rax
 	pushq	%rbx
+	.if \df
+	/* The uncommon entry additionally records DF in bit 16 of the packed
+	 * arithmetic flags. Only this path reads full flags, on the private stack. */
+	pushfq
+	popq	%rax
+	andl	$0x400, %eax
+	shll	$6, %eax
+	orq	%rax, 8(%rsp)
+	.endif
 	cld
 .endm
 
 .macro RESTORE_BOOTSTRAP_REGS_AND_JUMP target
 	popq	%rbx
-	popfq
+	popq	%rax
+	RESTORE_PACKED_FLAGS
 	popq	%rax
 	movq	old_rsp, %rsp
 	jmpq	*\target
 .endm
 
-.macro SAVE_SIMD_STATE base
+.macro RESTORE_PACKED_FLAGS
+	testl	$0x10000, %eax
+	jz	.Ldf_clear\@
+	std
+.Ldf_clear\@:
+	addb	$0x7f, %al
+	sahf
+.endm
+
+.macro SAVE_SIMD_STATE base, checkpoint=0
+	.if \checkpoint
+	cmpq	$1, checkpoint_vector_mode
+	je	.Lsave_xmm_only\@
+	movq	checkpoint_xsave_mask, %rax
+	.else
 	movq	processor_xsave_mask, %rax
+	.endif
 	testq	%rax, %rax
-	jz	.Lsave_xmm_only\@
+	jz	.Lsave_fx\@
 	movq	%rax, %rdx
 	shrq	$32, %rdx
+	cmpq	$0, processor_has_xsaveopt
+	je	.Lsave_xsave\@
+	xsaveopt64	(\base)
+	jmp	.Lsave_simd_done\@
+.Lsave_xsave\@:
 	xsave64	(\base)
 	jmp	.Lsave_simd_done\@
+.Lsave_fx\@:
+	fxsave64	(\base)
+	jmp	.Lsave_simd_done\@
 .Lsave_xmm_only\@:
-	movl	$0xFFFFFFFF, %eax
-	movl	$0xFFFFFFFF, %edx
 	movaps	%xmm0, (\base)
 	movaps	%xmm1, 16(\base)
 	movaps	%xmm2, 32(\base)
@@ -49,28 +82,27 @@
 	movaps	%xmm5, 80(\base)
 	movaps	%xmm6, 96(\base)
 	movaps	%xmm7, 112(\base)
-	movaps	%xmm8, 128(\base)
-	movaps	%xmm9, 144(\base)
-	movaps	%xmm10, 160(\base)
-	movaps	%xmm11, 176(\base)
-	movaps	%xmm12, 192(\base)
-	movaps	%xmm13, 208(\base)
-	movaps	%xmm14, 224(\base)
-	movaps	%xmm15, 240(\base)
 .Lsave_simd_done\@:
 .endm
 
-.macro RESTORE_SIMD_STATE base
+.macro RESTORE_SIMD_STATE base, checkpoint=0
+	.if \checkpoint
+	cmpq	$1, checkpoint_vector_mode
+	je	.Lrestore_xmm_only\@
+	movq	checkpoint_xsave_mask, %rax
+	.else
 	movq	processor_xsave_mask, %rax
+	.endif
 	testq	%rax, %rax
-	jz	.Lrestore_xmm_only\@
+	jz	.Lrestore_fx\@
 	movq	%rax, %rdx
 	shrq	$32, %rdx
 	xrstor64	(\base)
 	jmp	.Lrestore_simd_done\@
+.Lrestore_fx\@:
+	fxrstor64	(\base)
+	jmp	.Lrestore_simd_done\@
 .Lrestore_xmm_only\@:
-	movl	$0xFFFFFFFF, %eax
-	movl	$0xFFFFFFFF, %edx
 	movaps	(\base), %xmm0
 	movaps	16(\base), %xmm1
 	movaps	32(\base), %xmm2
@@ -79,14 +111,6 @@
 	movaps	80(\base), %xmm5
 	movaps	96(\base), %xmm6
 	movaps	112(\base), %xmm7
-	movaps	128(\base), %xmm8
-	movaps	144(\base), %xmm9
-	movaps	160(\base), %xmm10
-	movaps	176(\base), %xmm11
-	movaps	192(\base), %xmm12
-	movaps	208(\base), %xmm13
-	movaps	224(\base), %xmm14
-	movaps	240(\base), %xmm15
 .Lrestore_simd_done\@:
 .endm
 
@@ -178,9 +202,9 @@
 
 .macro RESTORE_FLAGS_RAX_RBX_AND_JUMP ckpt
 	movq	\ckpt, %rbx
-	/* POPFQ must use the private stack, not overwrite the restored red zone. */
-	pushq	CKPT_FLAGS(%rbx)
-	popfq
+	/* Packed arithmetic flags and DF need no application-stack writes. */
+	movq	CKPT_FLAGS(%rbx), %rax
+	RESTORE_PACKED_FLAGS
 	movq	CKPT_RSP(%rbx), %rsp
 	movq	CKPT_RETURN_ADDRESS(%rbx), %rax
 	movq	%rax, checkpoint_target_metadata+8
@@ -250,13 +274,24 @@ DEF_REPORT_GADGET_X64_PRESERVE KASPER_MDS
 DEF_REPORT_GADGET_X64_PRESERVE KASPER_PORT
 
 	.globl	make_checkpoint_x64
+	.globl	make_checkpoint_df
+	.p2align	4, 0x90
+	.type	make_checkpoint_df,@function
+make_checkpoint_df:
+	.cfi_startproc
+	X64_SWITCH_TO_SCRATCHPAD_STACK
+	SAVE_BOOTSTRAP_REGS 1
+	jmp	.Lcheckpoint_common
+	.size	make_checkpoint_df, .-make_checkpoint_df
+	.cfi_endproc
+
 	.p2align	4, 0x90
 	.type	make_checkpoint_x64,@function
 make_checkpoint_x64:
 	.cfi_startproc
 	X64_SWITCH_TO_SCRATCHPAD_STACK
 	SAVE_BOOTSTRAP_REGS
-
+.Lcheckpoint_common:
 	cmpb	$0, libcheckpoint_enabled
 	je	.Lskip_checkpoint
 
@@ -310,7 +345,7 @@ make_checkpoint_x64:
 	addq	%rax, simulation_statistics(,%rdx,8)
 #endif
 
-	SAVE_SIMD_STATE %rbx
+	SAVE_SIMD_STATE %rbx, 1
 
 	popq	%rdx
 	popq	%rax
@@ -340,7 +375,7 @@ make_checkpoint_x64:
 	decq	%r11
 	shlq	$PROCESSOR_EXTENDED_STATE_SHIFT, %r11
 	addq	%r11, %r10
-	RESTORE_SIMD_STATE %r10
+	RESTORE_SIMD_STATE %r10, 1
 	movq	%rbx, %rax
 	RESTORE_COVERAGE_CLOBBERS_FROM_CHECKPOINT %rax
 .Lno_normal_coverage:
@@ -376,7 +411,7 @@ restore_checkpoint_registers:
 	leaq	processor_extended_states, %r9
 	shlq	$PROCESSOR_EXTENDED_STATE_SHIFT, %r8
 	addq	%r9, %r8
-	RESTORE_SIMD_STATE %r8
+	RESTORE_SIMD_STATE %r8, 1
 	movq	%r11, %rax
 
 	RESTORE_GPRS_FROM_CHECKPOINT %rax

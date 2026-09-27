@@ -250,8 +250,12 @@ extern uint64_t libcheckpoint_enabled;
 extern volatile uint64_t in_restore_memlog;
 
 #if defined(__x86_64__)
-/* Zero selects the legacy XMM-only fallback on machines without OSXSAVE. */
+/* Zero selects FXSAVE/FXRSTOR on machines without OSXSAVE. */
 extern uint64_t processor_xsave_mask;
+extern uint64_t checkpoint_xsave_mask;
+extern uint64_t checkpoint_vector_mode;
+extern uint64_t processor_has_xsaveopt;
+void libcheckpoint_set_vector_state(unsigned mode);
 /* Dedicated report-call XSAVE image; never reused as the scratch call stack. */
 extern xsave_area_t report_extended_state;
 #endif

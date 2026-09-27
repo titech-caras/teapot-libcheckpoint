@@ -56,6 +56,17 @@ LIBCHECKPOINT_ASSERT_PROTECTED(processor_extended_states);
 #if defined(__x86_64__)
 uint64_t processor_xsave_mask LIBCHECKPOINT_PROTECTED_SECTION = 0;
 LIBCHECKPOINT_ASSERT_PROTECTED(processor_xsave_mask);
+#ifndef TEAPOT_X64_VECTOR_MODE
+#define TEAPOT_X64_VECTOR_MODE 0
+#endif
+/* Auto without a whole-program proof is full. Report calls always use full. */
+uint64_t checkpoint_vector_mode LIBCHECKPOINT_PROTECTED_SECTION =
+    TEAPOT_X64_VECTOR_MODE ? TEAPOT_X64_VECTOR_MODE : 4;
+uint64_t checkpoint_xsave_mask LIBCHECKPOINT_PROTECTED_SECTION = 0;
+uint64_t processor_has_xsaveopt LIBCHECKPOINT_PROTECTED_SECTION = 0;
+LIBCHECKPOINT_ASSERT_PROTECTED(checkpoint_vector_mode);
+LIBCHECKPOINT_ASSERT_PROTECTED(checkpoint_xsave_mask);
+LIBCHECKPOINT_ASSERT_PROTECTED(processor_has_xsaveopt);
 /*
  * Report calls cannot borrow scratchpad storage for XSAVE: the scratchpad is
  * also a C stack, while XRSTOR requires a 64-byte-aligned image whose reserved
@@ -144,6 +155,22 @@ static uint64_t checkpoint_read_timer() {
  * only the vector-related XCR0 components avoids unrelated large state such as
  * future tile registers while still covering x87, XMM, YMM, opmask, and ZMM.
  */
+static void select_checkpoint_vector_mask(void) {
+    uint64_t requested = checkpoint_vector_mode == 2 ? 3 :
+                         checkpoint_vector_mode == 3 ? 7 : UINT64_MAX;
+    checkpoint_xsave_mask = processor_xsave_mask & requested;
+}
+
+void libcheckpoint_set_vector_state(unsigned mode) {
+    if (mode < 1 || mode > 4 || checkpoint_cnt || libcheckpoint_enabled) {
+        fputs("Invalid or late checkpoint vector-state selection\n", stderr);
+        abort();
+    }
+    if (TEAPOT_X64_VECTOR_MODE == 0)
+        checkpoint_vector_mode = mode;
+    select_checkpoint_vector_mask();
+}
+
 static void initialize_x64_extended_state() {
     unsigned int eax, ebx, ecx, edx;
     const uint64_t vector_components =
@@ -183,6 +210,9 @@ static void initialize_x64_extended_state() {
     }
 
     processor_xsave_mask = mask;
+    __cpuid_count(0x0d, 1, eax, ebx, ecx, edx);
+    processor_has_xsaveopt = eax & 1;
+    select_checkpoint_vector_mask();
 }
 #endif
 
