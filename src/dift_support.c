@@ -26,6 +26,8 @@ LIBCHECKPOINT_ASSERT_PROTECTED(dift_reg_tags);
  */
 dift_tag_t dift_reg_queued_tags[DIFT_REG_TAGS_SIZE] LIBCHECKPOINT_PROTECTED_SECTION_ALIGNED(16);
 LIBCHECKPOINT_ASSERT_PROTECTED(dift_reg_queued_tags);
+uint8_t dift_reg_queue_pending[8] LIBCHECKPOINT_PROTECTED_SECTION_ALIGNED(8);
+LIBCHECKPOINT_ASSERT_PROTECTED(dift_reg_queue_pending);
 
 #define MAX_RUNTIME_MAPPED_RANGES 64
 struct mapped_range {

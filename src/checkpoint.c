@@ -569,6 +569,7 @@ LIBCHECKPOINT_RESTORE_PATH __attribute__((noreturn)) void restore_checkpoint_aft
         // Clear them after memlog replay, which may itself touch this storage.
         queued[i] = 0;
     }
+    dift_reg_queue_pending[0] = 0;
 
     restore_checkpoint_registers();
 }

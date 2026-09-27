@@ -24,6 +24,8 @@ typedef uint8_t dift_tag_t;
 // 0~15 = rax~r15, 16~47=zmm0~zmm31
 extern dift_tag_t dift_reg_tags[DIFT_REG_TAGS_SIZE] __attribute__((aligned(16)));
 extern dift_tag_t dift_reg_queued_tags[DIFT_REG_TAGS_SIZE] __attribute__((aligned(16)));
+/* Only byte zero is used; padding owns a complete protected ASan granule. */
+extern uint8_t dift_reg_queue_pending[8] __attribute__((aligned(8)));
 #endif
 
 #if defined(__x86_64__)

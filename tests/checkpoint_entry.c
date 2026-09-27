@@ -80,6 +80,7 @@ static void check_assertions(void) {
 /* The assembly probe tail-enters this only after a real checkpoint. */
 __attribute__((noreturn)) void checkpoint_test_transient_body(void) {
     memset(dift_reg_queued_tags, TAG_SECRET_INDIRECT, DIFT_REG_TAGS_SIZE);
+    dift_reg_queue_pending[0] = 1;
     memset(dift_reg_tags, TAG_SECRET, DIFT_REG_TAGS_SIZE);
     /* The queue must be empty even if replay itself writes nonzero bytes. */
     memory_history[0] = (memory_history_t){
@@ -114,6 +115,7 @@ static void check_queued_tags(void) {
             assert(checkpoint_rollback_probe(stack_top) == 1);
             assert(checkpoint_cnt == depth && !in_restore_memlog);
             assert(memory_history_top == memory_history);
+            assert(dift_reg_queue_pending[0] == 0);
             for (unsigned i = 0; i < DIFT_REG_TAGS_SIZE; ++i) {
                 assert(dift_reg_tags[i] == i + 1);
                 assert(dift_reg_queued_tags[i] == 0);
