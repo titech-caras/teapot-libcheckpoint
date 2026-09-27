@@ -14,7 +14,7 @@
 //==========config===========
 //#define VERBOSE
 //#define VERBOSE_DBGINFO
-#define COVERAGE
+/* COVERAGE is supplied by TEAPOT_ENABLE_COVERAGE for fuzzing builds. */
 //#define TIME
 //===========================
 

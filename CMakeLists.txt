@@ -153,7 +153,7 @@ if(BUILD_TESTING)
             tests/checkpoint_entry.c tests/checkpoint_entry.S
             ${entry_runtime_sources})
         teapot_configure_checkpoint_target(${entry_test})
-        target_compile_definitions(${entry_test} PRIVATE TIME)
+        target_compile_definitions(${entry_test} PRIVATE TIME COVERAGE)
         if(CHECKPOINT_ARCH_NAME STREQUAL "x64")
             target_sources(${entry_test} PRIVATE tests/checkpoint_x64_df.c tests/checkpoint_x64_df.S)
             target_link_options(${entry_test} PRIVATE -Wl,--wrap=restore_checkpoint)
@@ -222,8 +222,9 @@ endif()
 if(BUILD_TESTING AND CHECKPOINT_ARCH_NAME STREQUAL "x64")
     add_executable(checkpoint_x64_simd_normal_path_test
         tests/checkpoint_x64_simd_normal_path.c
-        tests/checkpoint_x64_simd_normal_path.S)
-    target_link_libraries(checkpoint_x64_simd_normal_path_test PRIVATE checkpoint)
+        tests/checkpoint_x64_simd_normal_path.S ${CHECKPOINT_RUNTIME_SOURCES})
+    teapot_configure_checkpoint_target(checkpoint_x64_simd_normal_path_test)
+    target_compile_definitions(checkpoint_x64_simd_normal_path_test PRIVATE COVERAGE)
     target_compile_options(checkpoint_x64_simd_normal_path_test PRIVATE -fno-pie)
     target_link_options(checkpoint_x64_simd_normal_path_test PRIVATE -no-pie)
     add_test(
