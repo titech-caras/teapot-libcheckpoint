@@ -158,6 +158,37 @@ static void check_memlog(void) {
     assert(!in_restore_memlog && memory_history_top == memory_history);
     for (size_t i = 0; i < sizeof(bytes); i++) assert(bytes[i] == 0xff);
     assert(page[0] == 0x55);
+    /* Exercise every width/alignment, and a fault halfway across a page. */
+    for (unsigned offset = 0; offset < 8; ++offset) {
+        for (unsigned width = 1; width <= 8; ++width) {
+            memset(bytes, 0x55, sizeof(bytes));
+            memory_history[0] = (memory_history_t){.addr = bytes + offset,
+                .data = UINT64_C(0x8877665544332211), .size = width};
+            memory_history_top = memory_history + 1;
+            restore_checkpoint_memlog();
+            for (unsigned i = 0; i < sizeof(bytes); ++i)
+                assert(bytes[i] == (i >= offset && i < offset + width ?
+                    ((const uint8_t *)&memory_history[0].data)[i-offset] : 0x55));
+        }
+    }
+    unsigned char *pair = mmap(NULL, page_size * 2, PROT_READ | PROT_WRITE,
+                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    assert(pair != MAP_FAILED);
+    memset(pair, 0, page_size * 2);
+    assert(mprotect(pair + page_size, page_size, PROT_READ) == 0);
+    memory_history[0] = (memory_history_t){.addr = pair + page_size - 4,
+                                          .data = UINT64_MAX, .size = 8};
+    memory_history_top = memory_history + 1;
+    if (sigsetjmp(memlog_fault_return, 1) == 0) {
+        restore_checkpoint_memlog();
+        abort();
+    }
+    for (unsigned i = 0; i < 4; ++i) {
+        assert(pair[page_size - 4 + i] == 0xff);
+        assert(pair[page_size + i] == 0);
+    }
+    restore_checkpoint_memlog();
+    assert(munmap(pair, page_size * 2) == 0);
     assert(sigaction(SIGSEGV, &old_segv, NULL) == 0);
     assert(sigaction(SIGBUS, &old_bus, NULL) == 0);
     assert(munmap(page, page_size) == 0);

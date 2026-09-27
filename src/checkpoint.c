@@ -575,6 +575,9 @@ LIBCHECKPOINT_RESTORE_PATH __attribute__((noreturn)) void restore_checkpoint_aft
 }
 
 LIBCHECKPOINT_RESTORE_PATH void restore_checkpoint_memlog() {
+    typedef uint64_t alias64 __attribute__((may_alias));
+    typedef uint32_t alias32 __attribute__((may_alias));
+    typedef uint16_t alias16 __attribute__((may_alias));
     in_restore_memlog = true;
     validate_memory_history_range(checkpoint_metadata[checkpoint_cnt].memory_history_top);
     while (memory_history_top > checkpoint_metadata[checkpoint_cnt].memory_history_top) {
@@ -591,8 +594,34 @@ LIBCHECKPOINT_RESTORE_PATH void restore_checkpoint_memlog() {
         volatile uint8_t *dst = (volatile uint8_t *)memory_history_top->addr;
         const uint8_t *src = (const uint8_t *)&memory_history_top->data;
         size_t size = memory_history_top->size;
-        for (size_t i = 0; i < size; i++) {
-            dst[i] = src[i];
+        assert(size <= sizeof(memory_history_top->data));
+        /* All supported Linux targets have pages at least 4 KiB. Using that
+         * granule is conservative on 16/64 KiB hosts. Cross-page replay keeps
+         * byte ordering so a later fault leaves the same restored prefix. */
+        if (((uintptr_t)dst & 4095) + size <= 4096) {
+            while (size) {
+                size_t width = size >= 8 && !((uintptr_t)dst & 7) ? 8 :
+                               size >= 4 && !((uintptr_t)dst & 3) ? 4 :
+                               size >= 2 && !((uintptr_t)dst & 1) ? 2 : 1;
+                /* memcpy loads avoid alignment and aliasing assumptions about
+                 * the source. Stores are aligned even on strict-alignment RV. */
+                if (width == 8) {
+                    uint64_t value; memcpy(&value, src, 8);
+                    *(volatile alias64 *)dst = value;
+                } else if (width == 4) {
+                    uint32_t value; memcpy(&value, src, 4);
+                    *(volatile alias32 *)dst = value;
+                } else if (width == 2) {
+                    uint16_t value; memcpy(&value, src, 2);
+                    *(volatile alias16 *)dst = value;
+                } else {
+                    *dst = *src;
+                }
+                dst += width; src += width; size -= width;
+            }
+        } else {
+            for (size_t i = 0; i < size; i++)
+                dst[i] = src[i];
         }
         memory_history_top->size = 0;
     }
