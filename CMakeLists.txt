@@ -32,6 +32,21 @@ if(BUILD_TESTING)
         endif()
     endforeach()
 
+    if(CHECKPOINT_ARCH_NAME STREQUAL "riscv64")
+        # This supported configuration has prioritized depth but no initial
+        # full-depth burst. In particular it must handle counter wrap to zero.
+        add_executable(checkpoint_entry_priority_test
+            tests/checkpoint_entry.c tests/checkpoint_entry.S ${CHECKPOINT_RUNTIME_SOURCES})
+        teapot_configure_checkpoint_target(checkpoint_entry_priority_test)
+        target_compile_definitions(checkpoint_entry_priority_test PRIVATE
+            SPECFUZZ_PRIORITIZED_SIMULATION TIME)
+        target_compile_options(checkpoint_entry_priority_test PRIVATE -fno-pie)
+        target_link_options(checkpoint_entry_priority_test PRIVATE -no-pie -Wl,--no-relax)
+        add_test(NAME checkpoint_entry_priority_capacity
+            COMMAND checkpoint_entry_priority_test capacity)
+        set_tests_properties(checkpoint_entry_priority_capacity PROPERTIES TIMEOUT 10)
+    endif()
+
     function(teapot_check_asan_test_link)
         # Some cross toolchains make try_compile build only an archive. These
         # tests need a real executable, including the ASan headers and runtime.

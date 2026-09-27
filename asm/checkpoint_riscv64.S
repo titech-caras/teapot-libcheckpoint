@@ -375,6 +375,10 @@ make_checkpoint_riscv64:
 .Lheuristic:
 #ifdef SPECFUZZ_PRIORITIZED_SIMULATION
 	mv	t4, t3
+	/* Match the defined zero-input result of x64 TZCNT / AArch64 CLZ.
+	 * A wrapping counter can be zero without BRANCH_FULL_EXEC_COUNT. */
+	li	t5, 64
+	beqz	t4, .Lctz_done
 	li	t5, 0
 .Lctz_loop:
 	andi	t6, t4, 1
