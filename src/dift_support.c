@@ -9,7 +9,9 @@
 #include <stdio.h>
 
 #ifndef MAP_FIXED_NOREPLACE
-#define MAP_FIXED_NOREPLACE MAP_FIXED
+/* Linux's non-destructive fixed-address request. Old kernels may ignore it
+ * and return a different address; map_fixed_pages checks that case too. */
+#define MAP_FIXED_NOREPLACE 0x100000
 #endif
 #ifndef MAP_NORESERVE
 #define MAP_NORESERVE 0
