@@ -143,19 +143,24 @@ static void restart_restore_checkpoint_memlog(void *ucontext) {
 
 void signal_handler(int sig, siginfo_t *info, void *ucontext) {
     uintptr_t *pc = signal_program_counter(ucontext);
+    /* A signal number alone does not identify a speculative fault. kill(),
+     * raise() and sigqueue() deliver application notifications with nonpositive
+     * codes, even when they interrupt a checkpoint or memory-log replay. */
+    const bool kernel_fault = info && info->si_code > 0;
 
-    if (in_restore_memlog) {
+    if (kernel_fault && in_restore_memlog) {
         restart_restore_checkpoint_memlog(ucontext);
 #ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
-    } else if (teapot_aarch64_bti_signal && teapot_aarch64_bti_signal(sig, info, ucontext)) {
+    } else if (kernel_fault && teapot_aarch64_bti_signal &&
+               teapot_aarch64_bti_signal(sig, info, ucontext)) {
         return;
 #endif
-    } else if (checkpoint_cnt != 0) {
+    } else if (kernel_fault && checkpoint_cnt != 0) {
         *pc = (uintptr_t)&restore_checkpoint_SIGSEGV;
     } else {
         /* The interrupted code may hold stdio/locale locks. Keep forwarding
          * diagnostics async-signal-safe and preserve the application's errno. */
-        static const char message[] = "Teapot: forwarding signal outside simulation\n";
+        static const char message[] = "Teapot: forwarding application signal\n";
         int interrupted_errno = errno;
         (void)write(STDERR_FILENO, message, sizeof(message) - 1);
         errno = interrupted_errno;

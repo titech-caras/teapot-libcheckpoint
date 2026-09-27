@@ -58,7 +58,7 @@ static void check_contexts(void) {
             if (!depth && !replay)
                 continue;
             ucontext_t context = {0};
-            siginfo_t info = {0};
+            siginfo_t info = {.si_signo = SIGSEGV, .si_code = SEGV_MAPERR};
             sigemptyset(&context.uc_sigmask);
             sigaddset(&context.uc_sigmask, SIGINT);
             sigset_t mask = context.uc_sigmask;
@@ -95,20 +95,35 @@ static void check_contexts(void) {
     }
 }
 
+static void illegal_instruction(void) {
+    /* Exercise kernel fault delivery, not raise()'s SI_TKILL notification. */
+#if defined(__x86_64__)
+    __asm__ volatile("ud2");
+#elif defined(__aarch64__)
+    __asm__ volatile(".inst 0");
+#elif defined(__riscv) && __riscv_xlen == 64
+    __asm__ volatile(".word 0");
+#else
+#error "Unsupported signal-test architecture"
+#endif
+    abort();
+}
+
 static void check_default_forwarding(void) {
     const int signals[] = {SIGILL, SIGSEGV, SIGBUS, SIGFPE,
 #ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
         SIGTRAP,
 #endif
     };
+    for (unsigned state = 0; state < 3; ++state)
     for (size_t i = 0; i < sizeof(signals) / sizeof(signals[0]); i++) {
         pid_t child = fork();
         assert(child >= 0);
         if (child == 0) {
             struct rlimit limit = {0, 0};
             assert(setrlimit(RLIMIT_CORE, &limit) == 0);
-            checkpoint_cnt = 0;
-            in_restore_memlog = false;
+            checkpoint_cnt = state;
+            in_restore_memlog = state == 2;
             signal(signals[i], SIG_DFL);
             setup_signal_handler();
             raise(signals[i]);
@@ -178,7 +193,7 @@ static void check_forwarding_stack_budget(void) {
         assert(sigaltstack(NULL, &stack) == 0);
         assert(!(stack.ss_flags & SS_DISABLE));
         assert(stack.ss_size >= 64 * 1024 + (size_t)SIGSTKSZ);
-        raise(SIGILL);
+        illegal_instruction();
         _exit(1);
     }
     int status;
@@ -199,7 +214,7 @@ static void check_signal_return(void) {
         expect_redirect = true;
         checkpoint_cnt = 1;
         setup_signal_handler();
-        raise(SIGILL);
+        illegal_instruction();
         _exit(1);
     }
     int status;
@@ -208,6 +223,54 @@ static void check_signal_return(void) {
 }
 
 static volatile sig_atomic_t application_calls;
+static volatile sig_atomic_t expected_signal_code;
+
+static void user_fault_handler(int sig, siginfo_t *info, void *context) {
+    assert(info && context && info->si_signo == sig);
+    assert(info->si_code == expected_signal_code);
+    assert(info->si_pid == getpid());
+    if (info->si_code == SI_QUEUE)
+        assert(info->si_value.sival_int == 1234);
+    ++application_calls;
+}
+
+static void check_user_fault_signals(void) {
+    const int signals[] = {SIGILL, SIGSEGV, SIGBUS, SIGFPE,
+#ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
+        SIGTRAP,
+#endif
+    };
+    setup_signal_handler();
+    for (unsigned depth = 0; depth <= 2; ++depth) {
+        for (unsigned replay = 0; replay <= 1; ++replay) {
+            checkpoint_cnt = depth;
+            in_restore_memlog = replay;
+            for (size_t i = 0; i < sizeof(signals) / sizeof(signals[0]); ++i) {
+                struct sigaction action = {
+                    .sa_sigaction = user_fault_handler, .sa_flags = SA_SIGINFO
+                };
+                sigemptyset(&action.sa_mask);
+                assert(sigaction__teapot_wrapper__(signals[i], &action, NULL) == 0);
+                sig_atomic_t before = application_calls;
+                expected_signal_code = SI_TKILL;
+                assert(raise(signals[i]) == 0);
+                expected_signal_code = SI_USER;
+                assert(kill(getpid(), signals[i]) == 0);
+                expected_signal_code = SI_QUEUE;
+                assert(sigqueue(getpid(), signals[i], (union sigval){.sival_int = 1234}) == 0);
+                assert(application_calls == before + 3);
+                assert(checkpoint_cnt == depth && in_restore_memlog == replay);
+
+                /* SIG_IGN is an application disposition even in replay. */
+                assert(signal__teapot_wrapper__(signals[i], SIG_IGN) != SIG_ERR);
+                assert(raise(signals[i]) == 0);
+                assert(application_calls == before + 3);
+                assert(checkpoint_cnt == depth && in_restore_memlog == replay);
+            }
+        }
+    }
+}
+
 static void usr1_handler(int sig) {
     assert(sig == SIGUSR1);
     ++application_calls;
@@ -291,7 +354,7 @@ static void check_post_setup_registration(void) {
         assert(signal__teapot_wrapper__(SIGILL, replacement_handler) == SIG_DFL);
         expect_redirect = true;
         checkpoint_cnt = 1;
-        raise(SIGILL);
+        illegal_instruction();
         _exit(1);
     }
     int status;
@@ -313,6 +376,8 @@ int main(int argc, char **argv) {
         check_post_setup_registration();
     else if (strcmp(argv[1], "unmanaged") == 0)
         check_unmanaged_signal();
+    else if (strcmp(argv[1], "user-faults") == 0)
+        check_user_fault_signals();
     else
         return 1;
     return 0;
