@@ -51,6 +51,22 @@ static struct saved_signal_action *saved_action_for_signal(int sig) {
     return NULL;
 }
 
+static bool signal_can_refault(int sig, const siginfo_t *info) {
+    if (!info || info->si_code <= 0)
+        return false;
+    /* These positive-code reports are asynchronous: returning need not
+     * execute the instruction that caused them again. */
+#ifdef SEGV_MTEAERR
+    if (sig == SIGSEGV && info->si_code == SEGV_MTEAERR)
+        return false;
+#endif
+#ifdef BUS_MCEERR_AO
+    if (sig == SIGBUS && info->si_code == BUS_MCEERR_AO)
+        return false;
+#endif
+    return true;
+}
+
 static void invoke_saved_signal_action(int sig, siginfo_t *info, void *ucontext) {
     struct saved_signal_action *saved = saved_action_for_signal(sig);
     const struct sigaction default_action = { .sa_handler = SIG_DFL };
@@ -61,9 +77,11 @@ static void invoke_saved_signal_action(int sig, siginfo_t *info, void *ucontext)
         return;
     } else if (action->sa_handler == SIG_DFL) {
         sigaction(sig, action, NULL);
-        // Delivery resumes with the original disposition when this handler
-        // returns and the kernel restores the caller's signal mask.
-        raise(sig);
+        // A precise hardware fault repeats at the original instruction after
+        // sigreturn, preserving its code and address for the core/tracer.
+        // Re-raise only signals that would not naturally occur again.
+        if (!signal_can_refault(sig, info))
+            raise(sig);
     } else {
         if ((action->sa_flags & SA_RESETHAND) && saved)
             saved->action = default_action;

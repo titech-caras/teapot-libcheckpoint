@@ -108,6 +108,39 @@ static void check_default_forwarding(void) {
     }
 }
 
+static void check_default_refault(void) {
+    const int signals[] = {SIGILL, SIGSEGV, SIGBUS, SIGFPE};
+    const int codes[] = {ILL_ILLOPC, SEGV_MAPERR, BUS_ADRERR, FPE_INTDIV};
+    for (size_t i = 0; i < sizeof(signals) / sizeof(signals[0]); i++) {
+        pid_t child = fork();
+        assert(child >= 0);
+        if (child == 0) {
+            struct rlimit limit = {0, 0};
+            assert(setrlimit(RLIMIT_CORE, &limit) == 0);
+            checkpoint_cnt = 0;
+            in_restore_memlog = false;
+            signal(signals[i], SIG_DFL);
+            setup_signal_handler();
+            ucontext_t context = {0};
+            siginfo_t info = {.si_signo = signals[i], .si_code = codes[i]};
+            info.si_addr = (void *)0x1234000;
+            *context_pc(&context) = 0x400000;
+            /* A precise fault must return the unchanged context to the
+             * kernel, not queue a new SI_TKILL that replaces its siginfo. */
+            signal_handler(signals[i], &info, &context);
+            assert(*context_pc(&context) == 0x400000);
+            assert(info.si_addr == (void *)0x1234000 && info.si_code == codes[i]);
+            struct sigaction action;
+            assert(sigaction(signals[i], NULL, &action) == 0);
+            assert(action.sa_handler == SIG_DFL);
+            _exit(0);
+        }
+        int status;
+        assert(waitpid(child, &status, 0) == child);
+        assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    }
+}
+
 static void stack_using_saved_handler(int sig) {
     volatile unsigned char work[32 * 1024];
     for (size_t i = 0; i < sizeof(work); i++)
@@ -259,6 +292,7 @@ int main(int argc, char **argv) {
         check_contexts();
     else if (strcmp(argv[1], "forward") == 0) {
         check_default_forwarding();
+        check_default_refault();
         check_forwarding_stack_budget();
     } else if (strcmp(argv[1], "redirect") == 0)
         check_signal_return();
