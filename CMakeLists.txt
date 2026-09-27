@@ -168,7 +168,7 @@ if(BUILD_TESTING)
         if(CHECKPOINT_ARCH_NAME STREQUAL "riscv64")
             target_link_options(${entry_test} PRIVATE -Wl,--no-relax)
         endif()
-        foreach(check IN ITEMS capacity timing storage memlog queued-tags)
+        foreach(check IN ITEMS capacity timing storage memlog queued-tags assertions)
             add_test(NAME checkpoint_entry_${mode}_${check}
                 COMMAND ${entry_test} ${check})
             set_tests_properties(checkpoint_entry_${mode}_${check}

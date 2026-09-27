@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "checkpoint.h"
@@ -45,6 +46,36 @@ static unsigned poisoned_ranges;
 static sigjmp_buf memlog_fault_return;
 static void *queue_fault_page;
 static bool queue_force_fault;
+
+static void check_assertions(void) {
+    int output[2];
+    assert(pipe(output) == 0);
+    pid_t child = fork();
+    assert(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        assert(dup2(output[1], STDERR_FILENO) >= 0);
+        close(output[1]);
+        checkpoint_cnt = 0;
+        /* Build configurations must not remove this safety precondition. */
+        restore_checkpoint(ROLLBACK_ROB_LEN);
+    }
+    close(output[1]);
+    char diagnostic[1024];
+    size_t length = 0;
+    ssize_t count;
+    while ((count = read(output[0], diagnostic + length,
+                         sizeof(diagnostic) - 1 - length)) > 0)
+        length += (size_t)count;
+    assert(count == 0);
+    assert(length > 0);
+    diagnostic[length] = '\0';
+    close(output[0]);
+    int status;
+    assert(waitpid(child, &status, 0) == child);
+    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+    assert(strstr(diagnostic, "checkpoint_cnt > 0") != NULL);
+}
 
 /* The assembly probe tail-enters this only after a real checkpoint. */
 __attribute__((noreturn)) void checkpoint_test_transient_body(void) {
@@ -310,6 +341,8 @@ int main(int argc, char **argv) {
         check_memlog();
     else if (strcmp(argv[1], "queued-tags") == 0)
         check_queued_tags();
+    else if (strcmp(argv[1], "assertions") == 0)
+        check_assertions();
 #if defined(__x86_64__)
     else if (strcmp(argv[1], "df") == 0)
         check_x64_df();

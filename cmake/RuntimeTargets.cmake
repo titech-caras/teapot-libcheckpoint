@@ -39,7 +39,9 @@ function(teapot_configure_checkpoint_target target)
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>"
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
-    target_compile_options(${target} PRIVATE -fno-stack-protector)
+    # Keep runtime safety preconditions enabled without replacing the user's
+    # standard Debug/Release/RelWithDebInfo/MinSizeRel flags.
+    target_compile_options(${target} PRIVATE -fno-stack-protector -UNDEBUG)
     target_compile_definitions(${target} PRIVATE
         DIFT_XOR_MASK=${DIFT_XOR_MASK}
         ${TEAPOT_DIFT_RUNTIME_DEFS}

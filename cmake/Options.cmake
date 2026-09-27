@@ -2,9 +2,6 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-set(CMAKE_C_FLAGS_DEBUG "-g ${CMAKE_C_FLAGS}")
-set(CMAKE_C_FLAGS_RELEASE "-O3 ${CMAKE_C_FLAGS}")
-
 set(CHECKPOINT_ARCH "" CACHE STRING "Target architecture override for libcheckpoint")
 set(TEAPOT_DIFT_LAYOUT "" CACHE STRING "Teapot DIFT layout profile")
 set(TEAPOT_AARCH64_TAG_STORAGE "shadow" CACHE STRING "AArch64 Teapot ASan-style tag storage backend: shadow or mte")
