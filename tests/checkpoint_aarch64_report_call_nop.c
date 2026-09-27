@@ -5,6 +5,22 @@
 #include <sys/mman.h>
 
 extern void make_report_call_nop(uint64_t address);
+extern void *__real_memcpy(void *dest, const void *src, size_t size);
+
+static int in_runtime_patch;
+void *__wrap_memcpy(void *dest, const void *src, size_t size) {
+    if (in_runtime_patch) {
+        fputs("runtime report patch called intercepted memcpy\n", stderr);
+        abort();
+    }
+    return __real_memcpy(dest, src, size);
+}
+
+static void patch_call(uintptr_t address) {
+    in_runtime_patch = 1;
+    make_report_call_nop(address);
+    in_runtime_patch = 0;
+}
 
 /* Exercise the runtime patcher directly, without checkpoint initialization. */
 static int check_call(int got, int expanded) {
@@ -35,7 +51,7 @@ static int check_call(int got, int expanded) {
     __builtin___clear_cache((char *)code, (char *)(code + 70));
     int (*call)(void) = (int (*)(void))code;
     if (call() != 6) { fputs("initial call failed\n", stderr); return 1; }
-    make_report_call_nop((uintptr_t)(code + (expanded == 1 ? 4 : 6)));
+    patch_call((uintptr_t)(code + (expanded == 1 ? 4 : 6)));
     if (code[4] != setup[0] || code[5] != setup[1] || code[6] != 0xd503201f) {
         fputs("report suppression patched address setup instead of the call\n", stderr);
         return 1;
@@ -44,7 +60,7 @@ static int check_call(int got, int expanded) {
         fputs("suppressed call did not preserve fallthrough\n", stderr);
         return 1;
     }
-    make_report_call_nop((uintptr_t)(code + (expanded == 1 ? 4 : 6)));
+    patch_call((uintptr_t)(code + (expanded == 1 ? 4 : 6)));
     if (code[4] != setup[0] || code[5] != setup[1] || call() != 5) {
         fputs("repeated suppression changed address setup\n", stderr);
         return 1;

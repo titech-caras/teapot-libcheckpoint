@@ -236,9 +236,9 @@ if(BUILD_TESTING AND CHECKPOINT_ARCH_NAME STREQUAL "aarch64")
     teapot_configure_checkpoint_target(checkpoint_aarch64_report_call_nop_test)
     # Test the patcher without linking the full runtime's startup mappings.
     target_compile_options(checkpoint_aarch64_report_call_nop_test PRIVATE
-        -ffunction-sections -fdata-sections)
+        -ffunction-sections -fdata-sections -O0 -fno-builtin-memcpy)
     target_link_options(checkpoint_aarch64_report_call_nop_test PRIVATE
-        -Wl,--gc-sections)
+        -Wl,--gc-sections -Wl,--wrap=memcpy)
     add_test(NAME checkpoint_aarch64_report_call_nop
         COMMAND checkpoint_aarch64_report_call_nop_test)
 endif()

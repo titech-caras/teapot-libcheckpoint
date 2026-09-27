@@ -195,7 +195,11 @@ static uint64_t expanded_report_call_site(uint64_t gadget_addr, size_t page_size
         if (protections[i] < 0 || !(protections[i] & PROT_READ))
             return gadget_addr;
     }
-    memcpy(call, (const void *)(uintptr_t)gadget_addr, window);
+    /* Report C code runs on a poisoned runtime stack. Even uninstrumented
+     * -O0 builds must not call an ASan-intercepted memcpy into that stack. */
+    const volatile uint32_t *words = (const volatile uint32_t *)(uintptr_t)gadget_addr;
+    for (size_t i = 0; i < sizeof(call) / sizeof(call[0]); i++)
+        call[i] = words[i];
     if ((call[0] & 0x9f00001fU) == 0x90000010U &&
         ((call[1] & 0xffc003ffU) == 0x91000210U ||
          (call[1] & 0xffc003ffU) == 0xf9400210U) &&
