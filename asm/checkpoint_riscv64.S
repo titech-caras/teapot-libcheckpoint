@@ -312,9 +312,12 @@ restore_checkpoint_\name:
 	.cfi_startproc
 	LOAD_ADDR t0, old_rsp
 	sd	sp, 0(t0)
-	LOAD_ADDR sp, scratchpad
-	li	t0, SCRATCHPAD_SIZE
-	add	sp, sp, t0
+	/* Keep sp on a valid downward-growing stack until the complete top is
+	 * ready, including between the address materialization instructions. */
+	LOAD_ADDR t0, scratchpad
+	li	t1, SCRATCHPAD_SIZE
+	add	t0, t0, t1
+	mv	sp, t0
 	li	a0, \reason
 	j	restore_checkpoint
 .Lrestore_checkpoint_\name\()_end:
