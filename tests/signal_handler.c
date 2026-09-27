@@ -162,6 +162,31 @@ static void check_signal_return(void) {
 }
 
 static volatile sig_atomic_t application_calls;
+static void usr1_handler(int sig) {
+    assert(sig == SIGUSR1);
+    ++application_calls;
+}
+
+static void check_unmanaged_signal(void) {
+    struct sigaction action = {.sa_handler = usr1_handler, .sa_flags = SA_RESTART};
+    sigemptyset(&action.sa_mask);
+    sigaddset(&action.sa_mask, SIGUSR2);
+    assert(sigaction(SIGUSR1, &action, NULL) == 0);
+    setup_signal_handler();
+    struct sigaction actual;
+    assert(sigaction(SIGUSR1, NULL, &actual) == 0);
+    assert(actual.sa_handler == usr1_handler && (actual.sa_flags & SA_RESTART));
+    assert(sigismember(&actual.sa_mask, SIGUSR2) == 1);
+    raise(SIGUSR1);
+    assert(application_calls == 1);
+
+    /* Preserving an explicit handler must not special-case SIG_DFL either. */
+    assert(signal(SIGUSR1, SIG_DFL) != SIG_ERR);
+    setup_signal_handler();
+    assert(sigaction(SIGUSR1, NULL, &actual) == 0);
+    assert(actual.sa_handler == SIG_DFL);
+}
+
 static void replacement_handler(int sig) {
     assert(sig == SIGILL);
     ++application_calls;
@@ -239,6 +264,8 @@ int main(int argc, char **argv) {
         check_signal_return();
     else if (strcmp(argv[1], "registration") == 0)
         check_post_setup_registration();
+    else if (strcmp(argv[1], "unmanaged") == 0)
+        check_unmanaged_signal();
     else
         return 1;
     return 0;

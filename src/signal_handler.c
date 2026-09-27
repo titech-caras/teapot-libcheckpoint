@@ -255,5 +255,4 @@ void setup_signal_handler() {
     install_signal_handler(SIGTRAP, &sa);
 #endif
 
-    signal(SIGUSR1, SIG_IGN);
 }

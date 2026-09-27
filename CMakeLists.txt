@@ -135,6 +135,8 @@ if(BUILD_TESTING)
         COMMAND checkpoint_signal_handler_test redirect)
     add_test(NAME checkpoint_signal_registration
         COMMAND checkpoint_signal_handler_test registration)
+    add_test(NAME checkpoint_signal_unmanaged
+        COMMAND checkpoint_signal_handler_test unmanaged)
 
     foreach(mode IN ITEMS default nested)
         set(entry_test checkpoint_entry_${mode}_test)
