@@ -6,6 +6,11 @@ if(TEST_SIX_RANGES)
     list(APPEND ranges 0xb000:0xc000)
 endif()
 teapot_validate_dift_layout(range-limit 0x10000000 0x1000000 ${ranges})
+if(TEST_SIX_RANGES)
+    # A broken validator must return success to the parent, not spawn another
+    # copy of this child forever.
+    return()
+endif()
 
 execute_process(COMMAND "${CMAKE_COMMAND}" -DTEST_SIX_RANGES=ON
     -P "${CMAKE_CURRENT_LIST_FILE}"
