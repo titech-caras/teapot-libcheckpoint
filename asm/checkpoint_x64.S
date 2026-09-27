@@ -53,8 +53,6 @@
 
 .macro SAVE_SIMD_STATE base, checkpoint=0
 	.if \checkpoint
-	cmpq	$1, checkpoint_vector_mode
-	je	.Lsave_xmm_only\@
 	movq	checkpoint_xsave_mask, %rax
 	.else
 	movq	processor_xsave_mask, %rax
@@ -72,23 +70,22 @@
 	jmp	.Lsave_simd_done\@
 .Lsave_fx\@:
 	fxsave64	(\base)
-	jmp	.Lsave_simd_done\@
-.Lsave_xmm_only\@:
-	movaps	%xmm0, (\base)
-	movaps	%xmm1, 16(\base)
-	movaps	%xmm2, 32(\base)
-	movaps	%xmm3, 48(\base)
-	movaps	%xmm4, 64(\base)
-	movaps	%xmm5, 80(\base)
-	movaps	%xmm6, 96(\base)
-	movaps	%xmm7, 112(\base)
 .Lsave_simd_done\@:
+.endm
+
+.macro SAVE_LOW_XMM base
+	movaps	%xmm0, PROCESSOR_XMM_STATE_OFFSET(\base)
+	movaps	%xmm1, PROCESSOR_XMM_STATE_OFFSET+16(\base)
+	movaps	%xmm2, PROCESSOR_XMM_STATE_OFFSET+32(\base)
+	movaps	%xmm3, PROCESSOR_XMM_STATE_OFFSET+48(\base)
+	movaps	%xmm4, PROCESSOR_XMM_STATE_OFFSET+64(\base)
+	movaps	%xmm5, PROCESSOR_XMM_STATE_OFFSET+80(\base)
+	movaps	%xmm6, PROCESSOR_XMM_STATE_OFFSET+96(\base)
+	movaps	%xmm7, PROCESSOR_XMM_STATE_OFFSET+112(\base)
 .endm
 
 .macro RESTORE_SIMD_STATE base, checkpoint=0
 	.if \checkpoint
-	cmpq	$1, checkpoint_vector_mode
-	je	.Lrestore_xmm_only\@
 	movq	checkpoint_xsave_mask, %rax
 	.else
 	movq	processor_xsave_mask, %rax
@@ -101,17 +98,36 @@
 	jmp	.Lrestore_simd_done\@
 .Lrestore_fx\@:
 	fxrstor64	(\base)
-	jmp	.Lrestore_simd_done\@
-.Lrestore_xmm_only\@:
-	movaps	(\base), %xmm0
-	movaps	16(\base), %xmm1
-	movaps	32(\base), %xmm2
-	movaps	48(\base), %xmm3
-	movaps	64(\base), %xmm4
-	movaps	80(\base), %xmm5
-	movaps	96(\base), %xmm6
-	movaps	112(\base), %xmm7
 .Lrestore_simd_done\@:
+.endm
+
+.macro RESTORE_LOW_XMM base
+	movaps	PROCESSOR_XMM_STATE_OFFSET(\base), %xmm0
+	movaps	PROCESSOR_XMM_STATE_OFFSET+16(\base), %xmm1
+	movaps	PROCESSOR_XMM_STATE_OFFSET+32(\base), %xmm2
+	movaps	PROCESSOR_XMM_STATE_OFFSET+48(\base), %xmm3
+	movaps	PROCESSOR_XMM_STATE_OFFSET+64(\base), %xmm4
+	movaps	PROCESSOR_XMM_STATE_OFFSET+80(\base), %xmm5
+	movaps	PROCESSOR_XMM_STATE_OFFSET+96(\base), %xmm6
+	movaps	PROCESSOR_XMM_STATE_OFFSET+112(\base), %xmm7
+.endm
+
+/* These are assembler-time choices, not register-mask tests at run time.
+ * The full path retains the existing CPU-feature fallback for older hosts. */
+.macro SAVE_CHECKPOINT_VECTORS base, variant
+	.if \variant == 1
+	SAVE_LOW_XMM \base
+	.elseif \variant == 2
+	SAVE_SIMD_STATE \base, 1
+	.endif
+.endm
+
+.macro RESTORE_CHECKPOINT_VECTORS base, variant
+	.if \variant == 1
+	RESTORE_LOW_XMM \base
+	.elseif \variant == 2
+	RESTORE_SIMD_STATE \base, 1
+	.endif
 .endm
 
 /*
@@ -273,31 +289,39 @@ DEF_REPORT_GADGET_X64_PRESERVE KASPER_CACHE
 DEF_REPORT_GADGET_X64_PRESERVE KASPER_MDS
 DEF_REPORT_GADGET_X64_PRESERVE KASPER_PORT
 
-	.globl	make_checkpoint_x64
-	.globl	make_checkpoint_df
+.macro DEF_MAKE_CHECKPOINT name, variant
+	.globl	\name
+	.globl	\name\()_df
 	.p2align	4, 0x90
-	.type	make_checkpoint_df,@function
-make_checkpoint_df:
+	.type	\name\()_df,@function
+\name\()_df:
 	.cfi_startproc
 	X64_SWITCH_TO_SCRATCHPAD_STACK
 	SAVE_BOOTSTRAP_REGS 1
-	jmp	.Lcheckpoint_common
-	.size	make_checkpoint_df, .-make_checkpoint_df
+	jmp	.Lcheckpoint_common\@
+	.size	\name\()_df, .-\name\()_df
 	.cfi_endproc
 
 	.p2align	4, 0x90
-	.type	make_checkpoint_x64,@function
-make_checkpoint_x64:
+	.type	\name,@function
+\name:
 	.cfi_startproc
 	X64_SWITCH_TO_SCRATCHPAD_STACK
 	SAVE_BOOTSTRAP_REGS
-.Lcheckpoint_common:
+.Lcheckpoint_common\@:
+#if TEAPOT_X64_VECTOR_MODE == 1
+	.set .Lvector_variant\@, 1
+#elif TEAPOT_X64_VECTOR_MODE > 1
+	.set .Lvector_variant\@, 2
+#else
+	.set .Lvector_variant\@, \variant
+#endif
 	cmpb	$0, libcheckpoint_enabled
-	je	.Lskip_checkpoint
+	je	.Lskip_checkpoint\@
 
 	movq	checkpoint_cnt, %rax
 	testq	%rax, %rax
-	jnz	.Lif_should_checkpoint
+	jnz	.Lif_should_checkpoint\@
 
 #ifdef USE_BRANCH_EXEC_COUNT
 	movq	checkpoint_target_metadata+16, %rbx
@@ -307,28 +331,28 @@ make_checkpoint_x64:
 
 #ifdef BRANCH_FULL_EXEC_COUNT
 	cmpq	$BRANCH_FULL_EXEC_COUNT, %rbx
-	jg	.Lheuristic
+	jg	.Lheuristic\@
 	movq	$MAX_CHECKPOINTS, max_checkpoints
-	jmp	.Lif_should_checkpoint
+	jmp	.Lif_should_checkpoint\@
 #endif
 
-.Lheuristic:
+.Lheuristic\@:
 #ifdef SPECFUZZ_PRIORITIZED_SIMULATION
 	tzcntq	%rbx, %rbx
 	shrq	$1, %rbx
 	incq	%rbx
 	cmpq	$MAX_CHECKPOINTS, %rbx
-	jbe	.Ldepth_limit_ready
+	jbe	.Ldepth_limit_ready\@
 	movq	$MAX_CHECKPOINTS, %rbx
-.Ldepth_limit_ready:
+.Ldepth_limit_ready\@:
 	movq	%rbx, max_checkpoints
 #else
 	movq	$1, max_checkpoints
 #endif
 
-.Lif_should_checkpoint:
+.Lif_should_checkpoint\@:
 	cmpq	max_checkpoints, %rax
-	jge	.Lskip_checkpoint
+	jge	.Lskip_checkpoint\@
 	incl	checkpoint_cnt
 
 	pushq	%rax
@@ -345,7 +369,7 @@ make_checkpoint_x64:
 	addq	%rax, simulation_statistics(,%rdx,8)
 #endif
 
-	SAVE_SIMD_STATE %rbx, 1
+	SAVE_CHECKPOINT_VECTORS %rbx, .Lvector_variant\@
 
 	popq	%rdx
 	popq	%rax
@@ -356,10 +380,21 @@ make_checkpoint_x64:
 	STORE_REGS_TO_CHECKPOINT %rax
 	COPY_DIFT_TAGS %rax
 	STORE_RUNTIME_STATE_TO_CHECKPOINT %rax
+	.if .Lvector_variant\@ == 0
+	leaq	.Lrestore_vectors_integer(%rip), %rbx
+	.elseif .Lvector_variant\@ == 1
+	leaq	.Lrestore_vectors_xmm(%rip), %rbx
+	.else
+	leaq	.Lrestore_vectors_full(%rip), %rbx
+	.endif
+	movq	%rbx, CKPT_VECTOR_RESTORE(%rax)
+	/* Even a dead vector calculation can change floating-point exception
+	 * status. Preserve MXCSR independently of vector-register liveness. */
+	stmxcsr	CKPT_MXCSR(%rax)
 
 #ifdef COVERAGE
 	cmpq	$1, checkpoint_cnt
-	jg	.Lno_normal_coverage
+	jg	.Lno_normal_coverage\@
 	movq	checkpoint_target_metadata+8, %rdi
 	movq	%rax, %rbx
 	callq	hfuzz_trace_pc
@@ -375,10 +410,11 @@ make_checkpoint_x64:
 	decq	%r11
 	shlq	$PROCESSOR_EXTENDED_STATE_SHIFT, %r11
 	addq	%r11, %r10
-	RESTORE_SIMD_STATE %r10, 1
+	RESTORE_CHECKPOINT_VECTORS %r10, .Lvector_variant\@
+	ldmxcsr	CKPT_MXCSR(%rbx)
 	movq	%rbx, %rax
 	RESTORE_COVERAGE_CLOBBERS_FROM_CHECKPOINT %rax
-.Lno_normal_coverage:
+.Lno_normal_coverage\@:
 #endif
 
 #ifdef TIME
@@ -390,11 +426,19 @@ make_checkpoint_x64:
 
 	RESTORE_BOOTSTRAP_REGS_AND_JUMP checkpoint_target_metadata
 
-.Lskip_checkpoint:
+.Lskip_checkpoint\@:
 	RESTORE_BOOTSTRAP_REGS_AND_JUMP checkpoint_target_metadata+8
-.Lmake_checkpoint_end:
-	.size	make_checkpoint_x64, .Lmake_checkpoint_end-make_checkpoint_x64
+	.size	\name, .-\name
 	.cfi_endproc
+.endm
+
+DEF_MAKE_CHECKPOINT make_checkpoint_integer, 0
+DEF_MAKE_CHECKPOINT make_checkpoint_xmm, 1
+DEF_MAKE_CHECKPOINT make_checkpoint_x64, 2
+
+/* Preserve the public full/DF entry used by existing instrumented binaries. */
+	.globl make_checkpoint_df
+	.set make_checkpoint_df, make_checkpoint_x64_df
 
 	.globl	restore_checkpoint_registers
 	.p2align	4, 0x90
@@ -411,8 +455,17 @@ restore_checkpoint_registers:
 	leaq	processor_extended_states, %r9
 	shlq	$PROCESSOR_EXTENDED_STATE_SHIFT, %r8
 	addq	%r9, %r8
+	/* Each depth owns its restore recipe, independent of the latest site. */
+	jmpq	*CKPT_VECTOR_RESTORE(%r11)
+
+.Lrestore_vectors_full:
 	RESTORE_SIMD_STATE %r8, 1
+	jmp	.Lrestore_vectors_integer
+.Lrestore_vectors_xmm:
+	RESTORE_LOW_XMM %r8
+.Lrestore_vectors_integer:
 	movq	%r11, %rax
+	ldmxcsr	CKPT_MXCSR(%rax)
 
 	RESTORE_GPRS_FROM_CHECKPOINT %rax
 

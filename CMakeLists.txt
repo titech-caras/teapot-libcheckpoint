@@ -230,6 +230,16 @@ if(BUILD_TESTING AND CHECKPOINT_ARCH_NAME STREQUAL "x64")
     add_test(
         NAME checkpoint_x64_simd_normal_path
         COMMAND checkpoint_x64_simd_normal_path_test)
+
+    add_executable(checkpoint_x64_vector_cases_test
+        tests/checkpoint_x64_vector_cases.c tests/checkpoint_x64_vector_cases.S
+        ${CHECKPOINT_RUNTIME_SOURCES})
+    teapot_configure_checkpoint_target(checkpoint_x64_vector_cases_test)
+    target_compile_definitions(checkpoint_x64_vector_cases_test PRIVATE COVERAGE ENABLE_NESTED_SPECULATION)
+    target_compile_options(checkpoint_x64_vector_cases_test PRIVATE -fno-pie)
+    target_link_options(checkpoint_x64_vector_cases_test PRIVATE -no-pie)
+    add_test(NAME checkpoint_x64_vector_cases COMMAND checkpoint_x64_vector_cases_test)
+    set_tests_properties(checkpoint_x64_vector_cases PROPERTIES TIMEOUT 10)
 endif()
 
 if(BUILD_TESTING AND CHECKPOINT_ARCH_NAME STREQUAL "x64" AND TEAPOT_TEST_ASAN_AVAILABLE)

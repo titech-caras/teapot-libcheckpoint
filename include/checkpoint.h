@@ -52,6 +52,9 @@
  */
 #define PROCESSOR_EXTENDED_STATE_SIZE 4096
 #define PROCESSOR_EXTENDED_STATE_SHIFT 12
+/* Keep the compact profile away from XSAVEOPT's persistent legacy/header
+ * image when successive checkpoints use different profiles at one depth. */
+#define PROCESSOR_XMM_STATE_OFFSET (PROCESSOR_EXTENDED_STATE_SIZE - 128)
 
 #if defined(__x86_64__)
 #define CHECKPOINT_METADATA_SIZE 256
@@ -78,6 +81,8 @@
 #define CKPT_RETURN_ADDRESS 152
 #define CKPT_DIFT_REG_TAGS 160
 #define CKPT_GUARD_LIST_TOP 208
+#define CKPT_VECTOR_RESTORE 216
+#define CKPT_MXCSR 224
 #elif defined(__aarch64__)
 #define CHECKPOINT_METADATA_SIZE 512
 #define CHECKPOINT_METADATA_SHIFT 9
@@ -211,7 +216,13 @@ typedef __attribute__((aligned(CHECKPOINT_METADATA_SIZE))) struct checkpoint_met
 
     uint32_t *guard_list_top;
 
+#if defined(__x86_64__)
+    void (*vector_restore)(void);
+    uint64_t mxcsr;
+    uint64_t alignment[(CHECKPOINT_METADATA_SIZE - CKPT_MXCSR - 8) / 8];
+#else
     uint64_t alignment[(CHECKPOINT_METADATA_SIZE - CKPT_GUARD_LIST_TOP - 8) / 8];
+#endif
 } checkpoint_metadata_t;
 
 typedef struct statistics {
@@ -265,6 +276,11 @@ LIBCHECKPOINT_PRESERVE_MOST void libcheckpoint_disable();
 
 #if defined(__x86_64__)
 __attribute__((noreturn)) void make_checkpoint_x64();
+__attribute__((noreturn)) void make_checkpoint_integer();
+__attribute__((noreturn)) void make_checkpoint_xmm();
+__attribute__((noreturn)) void make_checkpoint_df();
+__attribute__((noreturn)) void make_checkpoint_integer_df();
+__attribute__((noreturn)) void make_checkpoint_xmm_df();
 #elif defined(__aarch64__)
 __attribute__((noreturn)) void make_checkpoint_aarch64();
 #elif defined(__riscv) && __riscv_xlen == 64
@@ -287,6 +303,12 @@ _Static_assert(offsetof(checkpoint_metadata_t, dift_reg_tags) == CKPT_DIFT_REG_T
         "checkpoint_metadata_t DIFT offset mismatch");
 _Static_assert(offsetof(checkpoint_metadata_t, guard_list_top) == CKPT_GUARD_LIST_TOP,
         "checkpoint_metadata_t guard list offset mismatch");
+#if defined(__x86_64__)
+_Static_assert(offsetof(checkpoint_metadata_t, vector_restore) == CKPT_VECTOR_RESTORE,
+        "checkpoint_metadata_t vector restore offset mismatch");
+_Static_assert(offsetof(checkpoint_metadata_t, mxcsr) == CKPT_MXCSR,
+        "checkpoint_metadata_t MXCSR offset mismatch");
+#endif
 _Static_assert(sizeof(checkpoint_metadata_t) == CHECKPOINT_METADATA_SIZE,
         "checkpoint_metadata_t size mismatch");
 _Static_assert(offsetof(memory_history_t, addr) == MEM_HISTORY_ADDR_OFFSET,

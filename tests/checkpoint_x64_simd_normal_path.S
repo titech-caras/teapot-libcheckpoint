@@ -9,6 +9,8 @@ checkpoint_x64_simd_normal_path_probe:
 	movabsq $0x0123456789abcdef, %rax
 	movq %rax, %xmm0
 	movq %rax, %xmm15
+	cmpq $1, checkpoint_vector_mode(%rip)
+	je make_checkpoint_xmm
 	jmp make_checkpoint_x64
 
 .Lnormal_path:

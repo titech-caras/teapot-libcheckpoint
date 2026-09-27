@@ -204,7 +204,7 @@ static void initialize_x64_extended_state() {
             required_size = component_end;
     }
 
-    if (required_size > PROCESSOR_EXTENDED_STATE_SIZE) {
+    if (required_size > PROCESSOR_XMM_STATE_OFFSET) {
         fputs("Enabled x86 vector state exceeds the checkpoint save area\n", stderr);
         abort();
     }
