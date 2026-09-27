@@ -1,4 +1,10 @@
 function(teapot_validate_dift_layout name xor_mask asan_offset)
+    # Both shadow mapping and MTE initialization currently consume ranges 0–4.
+    # Reject unsupported layouts instead of silently omitting their tail.
+    list(LENGTH ARGN range_count)
+    if(range_count GREATER 5)
+        message(FATAL_ERROR "DIFT layout ${name} has ${range_count} app ranges; the runtime supports at most 5")
+    endif()
     math(EXPR granularity "${xor_mask} & -${xor_mask}")
     if(granularity LESS_EQUAL 0)
         message(FATAL_ERROR "DIFT layout ${name} has an invalid XOR mask")

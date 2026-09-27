@@ -15,6 +15,9 @@ include(cmake/DiftWrappers.cmake)
 if(BUILD_TESTING)
     include(CheckCSourceCompiles)
 
+    add_test(NAME checkpoint_dift_layout_range_limit
+        COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/dift_layout_range_limit.cmake")
+
     foreach(check IN ITEMS VALID BAD_SIZE BAD_ALIGNMENT REDUCED_ALIGNMENT)
         add_test(NAME checkpoint_protected_object_${check}
             COMMAND "${CMAKE_C_COMPILER}" -fsyntax-only -DTEST_${check}
