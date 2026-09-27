@@ -153,8 +153,12 @@ void signal_handler(int sig, siginfo_t *info, void *ucontext) {
     } else if (checkpoint_cnt != 0) {
         *pc = (uintptr_t)&restore_checkpoint_SIGSEGV;
     } else {
-        fprintf(stderr, "Signal caught outside simulation, forwarding: %s at pc=0x%lx addr=0x%lx\n",
-                strsignal(sig), (unsigned long)*pc, (unsigned long)info->si_addr);
+        /* The interrupted code may hold stdio/locale locks. Keep forwarding
+         * diagnostics async-signal-safe and preserve the application's errno. */
+        static const char message[] = "Teapot: forwarding signal outside simulation\n";
+        int interrupted_errno = errno;
+        (void)write(STDERR_FILENO, message, sizeof(message) - 1);
+        errno = interrupted_errno;
         invoke_saved_signal_action(sig, info, ucontext);
     }
 }
@@ -227,7 +231,7 @@ teapot_signal_function signal__teapot_wrapper__(int sig, teapot_signal_function 
 void setup_signal_handler() {
     // The kernel's frame (including extended CPU state) and the handler's
     // stack are separate budgets. SIGSTKSZ alone can leave too little room
-    // for libc's forwarding diagnostic on older libc/newer CPU combinations.
+    // for forwarding an application's handler on older libc/newer CPUs.
     // Keep this independent of application/scratch stacks and guard both ends.
     static stack_t ss;
     if (ss.ss_sp == NULL) {

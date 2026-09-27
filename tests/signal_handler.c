@@ -2,6 +2,7 @@
 #undef NDEBUG
 #include <assert.h>
 #include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
@@ -16,6 +17,18 @@ scratchpad_t scratchpad;
 uint64_t checkpoint_cnt;
 volatile uint64_t in_restore_memlog;
 static bool expect_redirect;
+
+/* A fault may interrupt stdio or locale while their locks are held. Reject
+ * calls to either diagnostic API anywhere on these signal test paths. */
+int __wrap_fprintf(FILE *stream, const char *format, ...) {
+    (void)stream;
+    (void)format;
+    abort();
+}
+char *__wrap_strsignal(int sig) {
+    (void)sig;
+    abort();
+}
 
 void restore_checkpoint_SIGSEGV(void) {
     sigset_t mask;

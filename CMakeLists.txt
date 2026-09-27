@@ -127,6 +127,8 @@ if(BUILD_TESTING)
     add_executable(checkpoint_signal_handler_test
         tests/signal_handler.c src/signal_handler.c)
     teapot_configure_checkpoint_target(checkpoint_signal_handler_test)
+    target_link_options(checkpoint_signal_handler_test PRIVATE
+        -Wl,--wrap=fprintf -Wl,--wrap=strsignal)
     add_test(NAME checkpoint_signal_context
         COMMAND checkpoint_signal_handler_test context)
     add_test(NAME checkpoint_signal_forwarding
