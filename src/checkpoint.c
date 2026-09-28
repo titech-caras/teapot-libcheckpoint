@@ -408,6 +408,18 @@ __attribute__((used, section(".preinit_array")))
 static preinit_function_t const instrumentation_state_preinit =
     initialize_instrumentation_state_early;
 
+#ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
+void libcheckpoint_prepare_aarch64_bti_components(void) {
+    extern void teapot_aarch64_bti_activate(void);
+    /* The final-link component adapter calls this from .preinit_array, before
+     * selected constructors. Do not enable checkpoints or taint argv here.
+     * Initialization is idempotent regardless of preinit object order. */
+    initialize_instrumentation_state_early();
+    setup_signal_handler();
+    teapot_aarch64_bti_activate();
+}
+#endif
+
 static bool memory_history_entry_is_valid(const memory_history_t *entry) {
 #if defined(__aarch64__) && defined(TEAPOT_AARCH64_MTE_TAG_STORAGE)
     if (entry->size == MEM_HISTORY_MTE_TAG_SIZE)
