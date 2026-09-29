@@ -35,6 +35,7 @@ extern int check_aarch64_bti_live_chain(void *stack_top);
 #ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
 extern int check_aarch64_bti_backend(void *stack_top, bool live_chain);
 extern int check_aarch64_bti_traps(void *stack_top);
+extern int check_aarch64_pac(void *stack_top);
 #endif
 #endif
 
@@ -396,6 +397,11 @@ int main(int argc, char **argv) {
 #ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
     else if (strcmp(argv[1], "bti-traps") == 0) {
         int status = check_aarch64_bti_traps(stack_top);
+        assert(munmap(mapping, stack_size) == 0);
+        return status;
+    }
+    else if (strcmp(argv[1], "pac-fpac") == 0) {
+        int status = check_aarch64_pac(stack_top);
         assert(munmap(mapping, stack_size) == 0);
         return status;
     }

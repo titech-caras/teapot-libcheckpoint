@@ -394,7 +394,39 @@ static void initialize_shadow_stack_state() {
 #endif
 }
 
+/* Decision 6: the rewriter aliases the software-mode window bounds so the
+ * runtime can refuse a link whose [text_start, transient_end) window is not one
+ * ordered range. Weak, so component objects, the BTI modes and ordinary links
+ * without the aliases are unaffected. */
+extern char teapot_soft_window_text_start[] __asm__("__teapot_soft_text_start")
+    __attribute__((weak));
+extern char teapot_soft_window_text_end[] __asm__("__teapot_soft_text_end")
+    __attribute__((weak));
+extern char teapot_soft_window_transient_start[] __asm__("__teapot_soft_transient_start")
+    __attribute__((weak));
+extern char teapot_soft_window_transient_end[] __asm__("__teapot_soft_transient_end")
+    __attribute__((weak));
+
+static void check_software_window_bounds(void) {
+    if (!teapot_soft_window_text_start || !teapot_soft_window_text_end ||
+        !teapot_soft_window_transient_start || !teapot_soft_window_transient_end)
+        return;
+    uintptr_t text_start = (uintptr_t)teapot_soft_window_text_start;
+    uintptr_t text_end = (uintptr_t)teapot_soft_window_text_end;
+    uintptr_t transient_start = (uintptr_t)teapot_soft_window_transient_start;
+    uintptr_t transient_end = (uintptr_t)teapot_soft_window_transient_end;
+    if (text_start < text_end && text_end <= transient_start && transient_start < transient_end)
+        return;
+    fprintf(stderr,
+            "[teapot] software window bounds are not ordered: text %#lx..%#lx "
+            "transient %#lx..%#lx; relink with the per-ISA software linker script\n",
+            (unsigned long)text_start, (unsigned long)text_end,
+            (unsigned long)transient_start, (unsigned long)transient_end);
+    exit(78);
+}
+
 static void initialize_instrumentation_state_early() {
+    check_software_window_bounds();
     initialize_first_spill_state();
     initialize_shadow_stack_state();
 #ifndef DISABLE_DIFT_RUNTIME
@@ -417,6 +449,17 @@ void libcheckpoint_prepare_aarch64_bti_components(void) {
     initialize_instrumentation_state_early();
     setup_signal_handler();
     teapot_aarch64_bti_activate();
+}
+
+void libcheckpoint_prepare_aarch64_bti_pac_components(void) {
+    extern void teapot_aarch64_bti_activate(void);
+    extern void teapot_aarch64_pac_activate(void);
+    /* Same early contract as the BTI component preinit, then PAC activation so
+     * no injected PACIA/AUTIA can execute before the host is validated. */
+    initialize_instrumentation_state_early();
+    setup_signal_handler();
+    teapot_aarch64_bti_activate();
+    teapot_aarch64_pac_activate();
 }
 #endif
 

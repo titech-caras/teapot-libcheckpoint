@@ -7,6 +7,10 @@
 extern void make_report_call_nop(uint64_t address);
 extern void *__real_memcpy(void *dest, const void *src, size_t size);
 
+/* Strong definitions so the patcher's BTI window checks are active. */
+uint64_t teapot_bti_text_lo, teapot_bti_text_hi;
+uint64_t teapot_bti_copy_lo, teapot_bti_copy_hi;
+
 static int in_runtime_patch;
 void *__wrap_memcpy(void *dest, const void *src, size_t size) {
     if (in_runtime_patch) {
@@ -69,9 +73,30 @@ static int check_call(int got, int expanded) {
     return 0;
 }
 
+static int check_normal_text_refusal(void) {
+    uint32_t *code = mmap(NULL, 8192, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (code == MAP_FAILED) { perror("mmap"); return 1; }
+    const uint32_t call = 0x94000003; /* bl code+4 */
+    code[0] = 0xd503201f; /* nop */
+    code[1] = call;
+    code[4] = 0xd65f03c0; /* ret */
+    __builtin___clear_cache((char *)code, (char *)(code + 8));
+    teapot_bti_text_lo = (uint64_t)(uintptr_t)code;
+    teapot_bti_text_hi = (uint64_t)(uintptr_t)(code + 4);
+    patch_call((uintptr_t)(code + 1));
+    int failed = code[1] != call;
+    teapot_bti_text_lo = teapot_bti_text_hi = 0;
+    munmap(code, 8192);
+    if (failed) { fputs("patched normal text\n", stderr); return 1; }
+    return 0;
+}
+
 int main(void) {
-    if (check_call(0, 0) | check_call(0, 1) | check_call(1, 1) | check_call(1, 2))
+    if (check_call(0, 0) | check_call(0, 1) | check_call(1, 1) | check_call(1, 2) |
+            check_normal_text_refusal())
         return 1;
-    puts("AArch64 short and expanded report-call suppression: 4/4 passed");
+    puts("AArch64 short and expanded report-call suppression: 4/4 passed; "
+         "normal text is never patched");
     return 0;
 }

@@ -241,6 +241,28 @@ static int check_aarch64_bti(void *stack_top, bool live_chain) {
         for (size_t i = 0; i < DIFT_REG_TAGS_SIZE; i++) assert(dift_reg_tags[i] == i + 1);
         assert(simulation_statistics.rollback_reason[expected_bti_reason] == saved_rollbacks + 1);
     }
+#ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
+    if (test_active_backend) {
+        /* Design step 3: a speculative branch into the middle of the copy (the
+         * unpadded ret word) faults and rolls back like any malformed target. */
+        extern char __teapot_bti_transient_start[];
+        for (unsigned depth = 0; depth < depths; depth++) {
+            checkpoint_cnt = depth;
+            instruction_cnt = 17 + depth;
+            test_memory = UINT64_C(0x123456789abcdef);
+            for (size_t i = 0; i < DIFT_REG_TAGS_SIZE; i++) dift_reg_tags[i] = (uint8_t)(i + 1);
+            memory_history_t *saved_history = memory_history_top;
+            uint32_t *saved_guards = guard_list_top;
+            uint64_t saved_rollbacks = simulation_statistics.rollback_reason[expected_bti_reason];
+            uint64_t saved_bti_rollbacks = teapot_bti_rollbacks;
+            assert(checkpoint_bti_probe(stack_top, __teapot_bti_transient_start + 4) == 42);
+            assert(memory_history_top == saved_history && guard_list_top == saved_guards);
+            assert(simulation_statistics.rollback_reason[expected_bti_reason] == saved_rollbacks + 1);
+            assert(teapot_bti_rollbacks == saved_bti_rollbacks + 1);
+        }
+        puts("Mid-copy unpadded target rollback passed");
+    }
+#endif
     checkpoint_cnt = 0;
     assert(munmap(page, (size_t)page_size) == 0);
     puts("BTI enforcement, forwarding and checkpoint memory/DIFT/register rollback passed");
@@ -371,9 +393,11 @@ int check_aarch64_bti_backend(void *stack_top, bool live_chain) {
     int result = check_aarch64_bti(stack_top, live_chain);
     if (!result) {
 #ifdef ENABLE_NESTED_SPECULATION
-        assert(teapot_bti_rollbacks == (live_chain ? 1 : 2));
+        /* Each depth takes the new mid-copy loop rollback; the live chain
+         * returns before that loop. */
+        assert(teapot_bti_rollbacks == (live_chain ? 1 : 4));
 #else
-        assert(teapot_bti_rollbacks == 1);
+        assert(teapot_bti_rollbacks == 2);
 #endif
         assert(teapot_bti_normal_resumes == 2);
         puts("Active BTI backend: same-PC normal resume and malformed-target rollback passed");

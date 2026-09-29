@@ -35,7 +35,7 @@ set(CHECKPOINT_RUNTIME_SOURCES
     src/dift_wrappers/dift_wrappers.c
     src/report_gadget.c)
 if(TEAPOT_EXPERIMENTAL_AARCH64_BTI)
-    list(APPEND CHECKPOINT_RUNTIME_SOURCES src/aarch64_bti.c asm/aarch64_bti.S)
+    list(APPEND CHECKPOINT_RUNTIME_SOURCES src/aarch64_bti.c asm/aarch64_bti.S src/aarch64_pac.c)
 endif()
 
 function(teapot_configure_checkpoint_target target)

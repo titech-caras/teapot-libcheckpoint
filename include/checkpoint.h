@@ -275,6 +275,7 @@ LIBCHECKPOINT_PRESERVE_MOST void libcheckpoint_enable(int argc, char **argv);
 LIBCHECKPOINT_PRESERVE_MOST void libcheckpoint_disable();
 #ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
 void libcheckpoint_prepare_aarch64_bti_components(void);
+void libcheckpoint_prepare_aarch64_bti_pac_components(void);
 #endif
 
 #if defined(__x86_64__)

@@ -185,6 +185,8 @@ if(BUILD_TESTING)
                 tests/checkpoint_aarch64_bti.c tests/checkpoint_aarch64_bti.S)
             if(TEAPOT_EXPERIMENTAL_AARCH64_BTI)
                 target_sources(${entry_test} PRIVATE tests/checkpoint_aarch64_bti_layout.S)
+                target_sources(${entry_test} PRIVATE
+                    tests/checkpoint_aarch64_pac.c tests/checkpoint_aarch64_pac.S)
                 target_link_options(${entry_test} PRIVATE
                     "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/cmake/AArch64Bti.ld")
                 add_test(NAME checkpoint_entry_${mode}_bti_backend
@@ -194,6 +196,10 @@ if(BUILD_TESTING)
                 add_test(NAME checkpoint_entry_${mode}_bti_traps
                     COMMAND ${entry_test} bti-traps)
                 set_tests_properties(checkpoint_entry_${mode}_bti_traps PROPERTIES
+                    TIMEOUT 30 SKIP_RETURN_CODE 77)
+                add_test(NAME checkpoint_entry_${mode}_pac_fpac
+                    COMMAND ${entry_test} pac-fpac)
+                set_tests_properties(checkpoint_entry_${mode}_pac_fpac PROPERTIES
                     TIMEOUT 30 SKIP_RETURN_CODE 77)
                 if(mode STREQUAL "nested")
                     add_test(NAME checkpoint_entry_nested_bti_backend_live_chain
@@ -279,7 +285,33 @@ if(BUILD_TESTING AND CHECKPOINT_ARCH_NAME STREQUAL "aarch64")
         -Wl,--gc-sections -Wl,--wrap=memcpy)
     add_test(NAME checkpoint_aarch64_report_call_nop
         COMMAND checkpoint_aarch64_report_call_nop_test)
+
+    add_executable(checkpoint_aarch64_report_bti_test
+        tests/checkpoint_aarch64_report_bti.c src/report_gadget.c)
+    teapot_configure_checkpoint_target(checkpoint_aarch64_report_bti_test)
+    # Test the patcher without linking the full runtime's startup mappings.
+    target_compile_options(checkpoint_aarch64_report_bti_test PRIVATE
+        -ffunction-sections -fdata-sections -O0 -fno-builtin-memcpy)
+    target_link_options(checkpoint_aarch64_report_bti_test PRIVATE
+        -Wl,--gc-sections)
+    add_test(NAME checkpoint_aarch64_report_bti
+        COMMAND checkpoint_aarch64_report_bti_test)
+    set_tests_properties(checkpoint_aarch64_report_bti PROPERTIES
+        TIMEOUT 10 SKIP_RETURN_CODE 77)
 endif()
 
 install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
     PATTERN "aarch64_shadow_stack.h" EXCLUDE)
+
+# Linker scripts for the guarded-copy layouts, with the whole-program software
+# window check. The BTI script is used with the aarch64-bti-pac target; the
+# software scripts place the application's normal text immediately before the
+# speculative copy (decision 6).
+install(FILES
+    cmake/AArch64Bti.ld
+    cmake/AArch64Software.ld
+    cmake/Riscv64Software.ld
+    cmake/X64Software.ld
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/libcheckpoint/cmake")
+install(PROGRAMS cmake/validate_software_layout.py
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/libcheckpoint/cmake")

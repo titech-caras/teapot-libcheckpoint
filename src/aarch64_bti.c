@@ -34,6 +34,7 @@ extern char teapot_bti_probe_valid[], teapot_bti_probe_invalid[];
 extern char teapot_bti_probe_brk[], teapot_bti_probe_hlt[];
 extern int teapot_bti_call_probe(void *);
 extern void restore_checkpoint_MALFORMED_INDIRECT_BR(void);
+extern bool teapot_aarch64_pac_auth_word(uint32_t) __attribute__((weak));
 
 static uint64_t bti_active LIBCHECKPOINT_PROTECTED_SECTION;
 uint64_t teapot_bti_normal_resumes LIBCHECKPOINT_PROTECTED_SECTION;
@@ -41,6 +42,9 @@ uint64_t teapot_bti_rollbacks LIBCHECKPOINT_PROTECTED_SECTION;
 LIBCHECKPOINT_ASSERT_PROTECTED(bti_active);
 LIBCHECKPOINT_ASSERT_PROTECTED(teapot_bti_normal_resumes);
 LIBCHECKPOINT_ASSERT_PROTECTED(teapot_bti_rollbacks);
+
+/* Window bounds for report-site patching; zero until activation succeeds. */
+uint64_t teapot_bti_text_lo, teapot_bti_text_hi, teapot_bti_copy_lo, teapot_bti_copy_hi;
 
 static void fail(const char *reason) {
     fprintf(stderr, "[teapot-bti] refusing activation: %s\n", reason);
@@ -92,6 +96,8 @@ bool teapot_aarch64_bti_signal(int sig, siginfo_t *info, void *context) {
             (uintptr_t)__teapot_bti_guard_start, (uintptr_t)__teapot_bti_guard_end))
         return false;
     uint32_t word = *(const uint32_t *)uc->uc_mcontext.pc;
+    if (teapot_aarch64_pac_auth_word && teapot_aarch64_pac_auth_word(word))
+        return false; /* PAC authentication faults use their own classifier */
     if (trap_landing(word)) {
         /* BRK/HLT win over BTI, including data words with those encodings.
          * They cannot execute past the target during simulation. At depth
@@ -115,6 +121,15 @@ bool teapot_aarch64_bti_signal(int sig, siginfo_t *info, void *context) {
     return true;
 }
 
+/* Exit-time counters so parity runs can attribute report differences. */
+static void print_bti_counters(void) {
+    if (!bti_active)
+        return;
+    fprintf(stderr, "[teapot-bti] exit: malformed rollbacks=%llu normal resumes=%llu\n",
+            (unsigned long long)teapot_bti_rollbacks,
+            (unsigned long long)teapot_bti_normal_resumes);
+}
+
 void teapot_aarch64_bti_activate(void) {
     if (bti_active)
         return;
@@ -129,30 +144,34 @@ void teapot_aarch64_bti_activate(void) {
             (pages & (pages - 1)) || lo % pages || hi % pages ||
             hi <= lo || text < lo || end <= text || end > hi - 8 ||
             (text & 3) || (end & 3) || shadow_end <= shadow ||
-            (shadow < hi && shadow_end > lo) ||
+            (shadow & 3) || (shadow_end & 3) || shadow < end ||
+            shadow_end > hi - 8 ||
             ((uintptr_t)teapot_aarch64_bti_activate >= lo &&
              (uintptr_t)teapot_aarch64_bti_activate < hi))
         fail("missing or non-isolated linker bounds");
     if (!(getauxval(AT_HWCAP2) & HWCAP2_BTI))
         fail("CPU/OS does not advertise BTI");
     size_t markers = 0;
-    for (uintptr_t pc = text; pc < end; pc += 4) {
-        const uint32_t *words = (const uint32_t *)pc;
-        if (hardware_landing(words[0])) {
-            if (words[0] != BTI_JC || words[1] != SECOND_MAGIC)
-                fail("normal text has an unmatched non-trapping hardware landing (BTI/PAC)");
-            markers++;
+    const uintptr_t ranges[2][2] = {{text, end}, {shadow, shadow_end}};
+    for (size_t range_index = 0; range_index < 2; range_index++) {
+        for (uintptr_t pc = ranges[range_index][0]; pc < ranges[range_index][1]; pc += 4) {
+            const uint32_t *words = (const uint32_t *)pc;
+            if (hardware_landing(words[0])) {
+                if (words[0] != BTI_JC || words[1] != SECOND_MAGIC)
+                    fail("normal or copied text has an unmatched non-trapping hardware landing (BTI/PAC)");
+                markers++;
+            }
         }
     }
     if (!markers)
-        fail("normal text contains no transformed BTI markers");
+        fail("normal and copied text contain no transformed BTI markers");
     const uintptr_t targets[] = {(uintptr_t)teapot_bti_probe_invalid,
         (uintptr_t)teapot_bti_probe_brk, (uintptr_t)teapot_bti_probe_hlt};
     uintptr_t valid = (uintptr_t)teapot_bti_probe_valid;
-    if (valid < end || valid > hi - 4 || (valid & 3))
+    if (valid < shadow_end || valid > hi - 4 || (valid & 3))
         fail("enforcement probe is not isolated outside application targets");
     for (size_t i = 0; i < sizeof targets / sizeof targets[0]; i++)
-        if (targets[i] < end || targets[i] > hi - 4 || (targets[i] & 3))
+        if (targets[i] < shadow_end || targets[i] > hi - 4 || (targets[i] & 3))
             fail("enforcement probe is not isolated outside application targets");
     // Both code sequences must execute before page protection is enabled.
     if (teapot_bti_call_probe(teapot_bti_probe_valid) != 42 ||
@@ -182,8 +201,14 @@ void teapot_aarch64_bti_activate(void) {
         if (waited != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
             fail("actual normal mapping did not enforce invalid/trapping landings");
     }
+    teapot_bti_text_lo = text;
+    teapot_bti_text_hi = end;
+    teapot_bti_copy_lo = shadow;
+    teapot_bti_copy_hi = shadow_end;
     bti_active = 1;
-    fprintf(stderr, "[teapot-bti] active: %zu validated markers, %zu guarded bytes; range/return checks retained\n",
+    atexit(print_bti_counters);
+    fprintf(stderr, "[teapot-bti] active: %zu validated markers in normal and copied text, "
+            "%zu guarded bytes; range/return checks retained\n",
             markers, (size_t)(hi - lo));
 }
 

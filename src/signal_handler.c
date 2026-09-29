@@ -18,6 +18,7 @@
  * link/enable the experimental backend. Rewritten BTI inputs require its
  * strong initialization symbol explicitly. */
 extern bool teapot_aarch64_bti_signal(int, siginfo_t *, void *) __attribute__((weak));
+extern bool teapot_aarch64_pac_signal(int, siginfo_t *, void *) __attribute__((weak));
 #endif
 
 // Older libc headers predate this Linux auxiliary-vector entry.
@@ -151,6 +152,9 @@ void signal_handler(int sig, siginfo_t *info, void *ucontext) {
     if (kernel_fault && in_restore_memlog) {
         restart_restore_checkpoint_memlog(ucontext);
 #ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
+    } else if (kernel_fault && teapot_aarch64_pac_signal &&
+               teapot_aarch64_pac_signal(sig, info, ucontext)) {
+        return;
     } else if (kernel_fault && teapot_aarch64_bti_signal &&
                teapot_aarch64_bti_signal(sig, info, ucontext)) {
         return;

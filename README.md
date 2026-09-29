@@ -42,6 +42,36 @@ then link that target with Teapot output produced with
 `--enable-nested-speculation`.
 The nested branch-count heuristic is capped at `MAX_CHECKPOINTS`.
 
+### Software-mode window (decision 6)
+
+The software mode's indirect-target check is one exact window,
+`[.__text_start, .__transient_end)`: the application's normal text followed
+immediately by the speculative copy, with the marker pair. Whole-program links
+must place those two ranges adjacently. The rewriter emits the application's
+normal text as `.teapot_normal`, and libcheckpoint ships one linker script per
+ISA under `cmake/`:
+
+```shell
+cc ... -Wl,-T,<libcheckpoint>/cmake/X64Software.ld        # x86-64
+cc ... -Wl,-T,<libcheckpoint>/cmake/Riscv64Software.ld    # RISC-V
+cc ... -Wl,-T,<libcheckpoint>/cmake/AArch64Software.ld    # AArch64
+```
+
+The scripts put `.teapot_normal` (normal text, then the copy) first and keep
+the runtime's text, `.teapot_trampolines`, the PLT and `.init`/`.fini` outside
+the window. Validate a linked binary with the shipped check:
+
+```shell
+python3 <libcheckpoint>/cmake/validate_software_layout.py a.out
+```
+
+It rejects unordered bounds, a `.teapot_normal` that does not contain the
+window, and any other allocated section inside it. The runtime also refuses at
+activation (exit 78) when `text_start < text_end <= transient_start <
+transient_end` does not hold: the whole-program rewriter emits weak
+`__teapot_soft_*` aliases for the bounds, so component objects, the BTI modes
+and ordinary links without the aliases skip the check.
+
 With `BUILD_TESTING=ON`, CTest includes signal tests and real checkpoint-entry
 probes for capacity, counter rollover, timing classification, and memory-history
 recovery after a read-only destination faults. Entry probes

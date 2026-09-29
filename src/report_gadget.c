@@ -209,6 +209,16 @@ static uint64_t expanded_report_call_site(uint64_t gadget_addr, size_t page_size
 }
 #endif
 
+#ifndef PROT_BTI
+#define PROT_BTI 0x10
+#endif
+#if defined(__aarch64__)
+extern uint64_t teapot_bti_text_lo __attribute__((weak));
+extern uint64_t teapot_bti_text_hi __attribute__((weak));
+extern uint64_t teapot_bti_copy_lo __attribute__((weak));
+extern uint64_t teapot_bti_copy_hi __attribute__((weak));
+#endif
+
 void make_report_call_nop(uint64_t gadget_addr) {
 #if defined(__x86_64__)
     unsigned char nop[] = {0x0f, 0x1f, 0x44, 0, 0};
@@ -232,6 +242,16 @@ void make_report_call_nop(uint64_t gadget_addr) {
     uintptr_t first_page = (uintptr_t)gadget_addr & ~(page_size - 1);
     size_t patch_size = sizeof(nop);
     size_t page_count = 1 + (gadget_addr + patch_size - 1 - first_page) / page_size;
+    int bti_bits = 0;
+#if defined(__aarch64__)
+    if (&teapot_bti_text_lo != NULL) {
+        uintptr_t last = first_page + page_count * page_size;
+        if (first_page < teapot_bti_text_hi && last > teapot_bti_text_lo)
+            return; /* normal text is never patched */
+        if (first_page < teapot_bti_copy_hi && last > teapot_bti_copy_lo)
+            bti_bits = PROT_BTI;
+    }
+#endif
     int protections[2] = {-1, -1};
     if (!report_page_protections(first_page, page_size, page_count, protections))
         return;
@@ -244,7 +264,7 @@ void make_report_call_nop(uint64_t gadget_addr) {
             goto restore;
         }
         if (mprotect((void *)(first_page + i * page_size), page_size,
-                     protections[i] | PROT_READ | PROT_WRITE) != 0) {
+                     protections[i] | PROT_READ | PROT_WRITE | bti_bits) != 0) {
             report_error("Could not make report page writable\n");
             goto restore;
         }
@@ -268,7 +288,8 @@ void make_report_call_nop(uint64_t gadget_addr) {
 
 restore:
     for (size_t i = 0; i < changed_pages; i++) {
-        if (mprotect((void *)(first_page + i * page_size), page_size, protections[i]) != 0) {
+        if (mprotect((void *)(first_page + i * page_size), page_size,
+                     protections[i] | bti_bits) != 0) {
             report_error("Could not restore report page permissions\n");
             restore_failed = true;
         }
