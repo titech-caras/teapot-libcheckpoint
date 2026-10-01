@@ -303,15 +303,8 @@ endif()
 install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
     PATTERN "aarch64_shadow_stack.h" EXCLUDE)
 
-# Linker scripts for the guarded-copy layouts, with the whole-program software
-# window check. The BTI script is used with the aarch64-bti-pac target; the
-# software scripts place the application's normal text immediately before the
-# speculative copy (decision 6).
+# The guarded-copy linker script of the aarch64-bti-pac target. Software mode
+# needs no layout: its indirect-target check tests only the marker pair.
 install(FILES
     cmake/AArch64Bti.ld
-    cmake/AArch64Software.ld
-    cmake/Riscv64Software.ld
-    cmake/X64Software.ld
-    DESTINATION "${CMAKE_INSTALL_DATADIR}/libcheckpoint/cmake")
-install(PROGRAMS cmake/validate_software_layout.py
     DESTINATION "${CMAKE_INSTALL_DATADIR}/libcheckpoint/cmake")
