@@ -2,6 +2,7 @@
 #include "signal_handler.h"
 #include "dift_support.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -59,7 +60,10 @@ LIBCHECKPOINT_ASSERT_PROTECTED(processor_xsave_mask);
 #ifndef TEAPOT_X64_VECTOR_MODE
 #define TEAPOT_X64_VECTOR_MODE 0
 #endif
-/* Auto without a whole-program proof is full. Report calls always use full. */
+/* Each checkpoint site chooses its entry (integer, xmm0-7 or full); this value
+ * only selects the XSAVE mask of the full entry. Report calls always save the
+ * full processor vector state. A fixed TEAPOT_X64_VECTOR_STATE overrides every
+ * site's choice. */
 uint64_t checkpoint_vector_mode LIBCHECKPOINT_PROTECTED_SECTION =
     TEAPOT_X64_VECTOR_MODE ? TEAPOT_X64_VECTOR_MODE : 4;
 uint64_t checkpoint_xsave_mask LIBCHECKPOINT_PROTECTED_SECTION = 0;
@@ -461,25 +465,25 @@ static void validate_memory_history_range(memory_history_t *checkpoint_top) {
     }
 }
 
+/* Everything goes to stderr: under VERBOSE the program's stdout must stay its own. */
 void print_statistics() {
-    fprintf(stderr, "Total Checkpoints: %lu\n", simulation_statistics.total_ckpt);
+    fprintf(stderr, "Total Checkpoints: %" PRIu64 "\n", simulation_statistics.total_ckpt);
 
     for (int i = 0; i < MAX_CHECKPOINTS; i++) {
-        fprintf(stderr, "\tDepth %d: %lu\n", i + 1, simulation_statistics.ckpt_depth[i]);
+        fprintf(stderr, "\tDepth %d: %" PRIu64 "\n", i + 1, simulation_statistics.ckpt_depth[i]);
     }
 
-    puts("");
-    puts("Rollbacks");
-    fprintf(stderr, "\tRollback ROB_LEN: %lu\n", simulation_statistics.rollback_reason[ROLLBACK_ROB_LEN]);
-    fprintf(stderr, "\tRollback SIGSEGV: %lu\n", simulation_statistics.rollback_reason[ROLLBACK_SIGSEGV]);
-    fprintf(stderr, "\tRollback EXT_LIB: %lu\n", simulation_statistics.rollback_reason[ROLLBACK_EXT_LIB]);
-    fprintf(stderr, "\tRollback MALFORMED_INDIRECT_BR: %lu\n", simulation_statistics.rollback_reason[ROLLBACK_MALFORMED_INDIRECT_BR]);
+    fputs("\nRollbacks\n", stderr);
+    fprintf(stderr, "\tRollback ROB_LEN: %" PRIu64 "\n", simulation_statistics.rollback_reason[ROLLBACK_ROB_LEN]);
+    fprintf(stderr, "\tRollback SIGSEGV: %" PRIu64 "\n", simulation_statistics.rollback_reason[ROLLBACK_SIGSEGV]);
+    fprintf(stderr, "\tRollback EXT_LIB: %" PRIu64 "\n", simulation_statistics.rollback_reason[ROLLBACK_EXT_LIB]);
+    fprintf(stderr, "\tRollback MALFORMED_INDIRECT_BR: %" PRIu64 "\n", simulation_statistics.rollback_reason[ROLLBACK_MALFORMED_INDIRECT_BR]);
 
-    puts("");
-    fprintf(stderr, "Total Bugs: %lu\n", simulation_statistics.total_bug);
-    fprintf(stderr, "\tBug KASPER_MDS: %lu\n", simulation_statistics.bug_type[GADGET_KASPER_MDS]);
-    fprintf(stderr, "\tBug KASPER_CACHE: %lu\n", simulation_statistics.bug_type[GADGET_KASPER_CACHE]);
-    fprintf(stderr, "\tBug KASPER_PORT: %lu\n", simulation_statistics.bug_type[GADGET_KASPER_PORT]);
+    fputs("\n", stderr);
+    fprintf(stderr, "Total Bugs: %" PRIu64 "\n", simulation_statistics.total_bug);
+    fprintf(stderr, "\tBug KASPER_MDS: %" PRIu64 "\n", simulation_statistics.bug_type[GADGET_KASPER_MDS]);
+    fprintf(stderr, "\tBug KASPER_CACHE: %" PRIu64 "\n", simulation_statistics.bug_type[GADGET_KASPER_CACHE]);
+    fprintf(stderr, "\tBug KASPER_PORT: %" PRIu64 "\n", simulation_statistics.bug_type[GADGET_KASPER_PORT]);
 
 #ifdef TIME
 
@@ -571,7 +575,7 @@ LIBCHECKPOINT_RESTORE_PATH __attribute__((noreturn)) void restore_checkpoint(int
     checkpoint_cnt--;
 
 #ifdef VERBOSE_DBGINFO
-    fprintf(stderr, "[teapot] Rollback: to 0x%lx at nested level %lu\n",
+    fprintf(stderr, "[teapot] Rollback: to 0x%" PRIx64 " at nested level %" PRIu64 "\n",
             checkpoint_metadata[checkpoint_cnt].return_address, checkpoint_cnt);
 #endif
 

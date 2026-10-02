@@ -10,6 +10,10 @@
 
 #define SILENCE_GADGET_AFTER_FIRST_DISCOVERY
 
+/* The speculation budget (ROB_LEN) is Teapot's alone: its restore points
+ * compare the instruction count against teapot/configs/runtime.py. The
+ * runtime never reads it, so -DROB_LEN here changes nothing. */
+
 #if defined(__aarch64__)
 #define ENABLE_AARCH64_SIMD_STATE
 #endif

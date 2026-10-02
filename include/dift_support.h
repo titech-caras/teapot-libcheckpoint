@@ -21,7 +21,10 @@ typedef uint8_t dift_tag_t;
 #define DIFT_REG_TAGS_SIZE 48
 
 #ifndef __ASSEMBLER__
-// 0~15 = rax~r15, 16~47=zmm0~zmm31
+// One tag per general-purpose register: 0~15 = rax~r15 on x64; 0~30 = x0~x30 and
+// 31 = sp on AArch64; 0~31 = x0~x31 on RISC-V. On x64, 16~47 are reserved for
+// xmm0~xmm31 (teapot/arch/x64/dift.py), but Teapot's register model has no
+// vector registers, so nothing tags them today.
 extern dift_tag_t dift_reg_tags[DIFT_REG_TAGS_SIZE] __attribute__((aligned(16)));
 extern dift_tag_t dift_reg_queued_tags[DIFT_REG_TAGS_SIZE] __attribute__((aligned(16)));
 /* Only byte zero is used; padding owns a complete protected ASan granule. */
@@ -45,7 +48,6 @@ extern uint8_t dift_reg_queue_pending[8] __attribute__((aligned(8)));
 # define DIFT_REG_R13 13
 # define DIFT_REG_R14 14
 # define DIFT_REG_R15 15
-// TODO: xmm registers
 
 # define DIFT_ARG0 DIFT_REG_RDI
 # define DIFT_ARG1 DIFT_REG_RSI
