@@ -522,19 +522,4 @@ restore_checkpoint_registers:
 	.size	restore_checkpoint_registers, .Lrestore_checkpoint_registers_end-restore_checkpoint_registers
 	.cfi_endproc
 
-	.bss
-	.globl	checkpoint_target_metadata
-	.p2align	3
-	.type	checkpoint_target_metadata,@object
-checkpoint_target_metadata:
-	.zero	CHECKPOINT_TARGET_METADATA_SIZE
-	.size	checkpoint_target_metadata, CHECKPOINT_TARGET_METADATA_SIZE
-
-	.globl	max_checkpoints
-	.p2align	3
-	.type	max_checkpoints,@object
-max_checkpoints:
-	.zero	8
-	.size	max_checkpoints, 8
-
 	.section	.note.GNU-stack,"",@progbits

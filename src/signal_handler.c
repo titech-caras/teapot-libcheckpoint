@@ -3,6 +3,7 @@
 #include "checkpoint.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
@@ -32,7 +33,8 @@ struct saved_signal_action {
     bool valid;
 };
 
-static struct saved_signal_action saved_signal_actions[] = {
+/* Read by the handler during simulation: protected like the runtime state. */
+static struct saved_signal_action saved_signal_actions[] LIBCHECKPOINT_PROTECTED_SECTION = {
     { .sig = SIGSEGV },
     { .sig = SIGILL },
     { .sig = SIGFPE },
@@ -42,6 +44,22 @@ static struct saved_signal_action saved_signal_actions[] = {
     { .sig = SIGTRAP },
 #endif
 };
+LIBCHECKPOINT_ASSERT_PROTECTED(saved_signal_actions);
+
+/* saved_signal_actions is poisoned like the rest of the protected state, and a
+ * struct assignment may become a call to memcpy (unoptimized builds, or copies
+ * above a compiler's inline limit), which ASan intercepts and checks. Copy
+ * whole words through volatile accesses instead, as the checkpoint restore does
+ * for the protected tag storage. */
+static void copy_signal_action(struct sigaction *dst, const struct sigaction *src) {
+    typedef uint64_t action_word_t __attribute__((may_alias));
+    _Static_assert(sizeof(struct sigaction) % sizeof(action_word_t) == 0, "whole sigaction words");
+    _Static_assert(_Alignof(struct sigaction) % _Alignof(action_word_t) == 0, "aligned sigaction words");
+    volatile action_word_t *to = (volatile action_word_t *)dst;
+    const volatile action_word_t *from = (const volatile action_word_t *)src;
+    for (size_t i = 0; i < sizeof(struct sigaction) / sizeof(action_word_t); i++)
+        to[i] = from[i];
+}
 
 static struct saved_signal_action *saved_action_for_signal(int sig) {
     for (size_t i = 0; i < sizeof(saved_signal_actions) / sizeof(saved_signal_actions[0]); i++) {
@@ -72,7 +90,8 @@ static void invoke_saved_signal_action(int sig, siginfo_t *info, void *ucontext)
     struct saved_signal_action *saved = saved_action_for_signal(sig);
     const struct sigaction default_action = { .sa_handler = SIG_DFL };
     // A handler may replace itself. Snapshot its disposition before calling it.
-    const struct sigaction snapshot = saved && saved->valid ? saved->action : default_action;
+    struct sigaction snapshot;
+    copy_signal_action(&snapshot, saved && saved->valid ? &saved->action : &default_action);
     const struct sigaction *action = &snapshot;
     if (action->sa_handler == SIG_IGN) {
         return;
@@ -85,7 +104,7 @@ static void invoke_saved_signal_action(int sig, siginfo_t *info, void *ucontext)
             raise(sig);
     } else {
         if ((action->sa_flags & SA_RESETHAND) && saved)
-            saved->action = default_action;
+            copy_signal_action(&saved->action, &default_action);
         // Teapot blocks all signals while editing the fault context, but an
         // application handler must observe its own mask and NODEFER contract.
         sigset_t mask = ((ucontext_t *)ucontext)->uc_sigmask, previous;
@@ -182,7 +201,7 @@ static void install_signal_handler(int sig, const struct sigaction *action) {
     // Re-enabling the runtime must not chain its handler back to itself.
     if (saved && !((previous.sa_flags & SA_SIGINFO) &&
                    previous.sa_sigaction == signal_handler)) {
-        saved->action = previous;
+        copy_signal_action(&saved->action, &previous);
         saved->valid = true;
     }
 }
@@ -199,7 +218,8 @@ int sigaction__teapot_wrapper__(int sig, const struct sigaction *action,
     sigfillset(&all);
     if (sigprocmask(SIG_BLOCK, &all, &previous_mask) != 0)
         return -1;
-    const struct sigaction previous_action = saved->action;
+    struct sigaction previous_action;
+    copy_signal_action(&previous_action, &saved->action);
     int result = 0;
     if (action) {
         const struct sigaction next_action = *action;
@@ -210,7 +230,7 @@ int sigaction__teapot_wrapper__(int sig, const struct sigaction *action,
         sigfillset(&runtime_action.sa_mask);
         result = sigaction(sig, &runtime_action, NULL);
         if (result == 0)
-            saved->action = next_action;
+            copy_signal_action(&saved->action, &next_action);
     }
     if (result == 0 && old_action)
         *old_action = previous_action;
@@ -237,13 +257,18 @@ teapot_signal_function signal__teapot_wrapper__(int sig, teapot_signal_function 
     return previous.sa_handler;
 }
 
+/* Written once at setup and never read during simulation, so it may stay
+ * outside the protected section. File scope gives it the same symbol name with
+ * every compiler, for the protected-globals test. */
+static stack_t signal_stack;
+
 void setup_signal_handler() {
     // The kernel's frame (including extended CPU state) and the handler's
     // stack are separate budgets. SIGSTKSZ alone can leave too little room
     // for forwarding an application's handler on older libc/newer CPUs.
     // Keep this independent of application/scratch stacks and guard both ends.
-    static stack_t ss;
-    if (ss.ss_sp == NULL) {
+    stack_t *const ss = &signal_stack;
+    if (ss->ss_sp == NULL) {
         const size_t handler_budget = 64 * 1024;
         size_t frame_size = getauxval(AT_MINSIGSTKSZ);
         if (frame_size < (size_t)SIGSTKSZ)
@@ -266,14 +291,14 @@ void setup_signal_handler() {
             munmap(mapping, size + 2 * page_size);
             abort();
         }
-        ss.ss_sp = stack;
-        ss.ss_size = size;
+        ss->ss_sp = stack;
+        ss->ss_size = size;
     }
     struct sigaction sa = {
         .sa_sigaction = signal_handler,
         .sa_flags = SA_ONSTACK | SA_SIGINFO
     };
-    if (sigaltstack(&ss, NULL) != 0) {
+    if (sigaltstack(ss, NULL) != 0) {
         perror("sigaltstack");
         abort();
     }

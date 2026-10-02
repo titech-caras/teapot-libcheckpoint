@@ -212,18 +212,26 @@ static void check_storage(void) {
     const struct {
         void *address;
         size_t size;
+        size_t alignment;
+        bool zeroed;
     } objects[] = {
-        {memory_history, sizeof(memory_history)},
-        {guard_list, sizeof(guard_list)},
-        {scratchpad, sizeof(scratchpad)},
+        {memory_history, sizeof(memory_history), 16, true},
+        /* main() fills in the branch counter and fixed-register sources; see below. */
+        {checkpoint_target_metadata, sizeof(checkpoint_target_metadata), 16, false},
+        {guard_list, sizeof(guard_list), 16, true},
+        {scratchpad, sizeof(scratchpad), 16, true},
+        {&max_checkpoints, sizeof(max_checkpoints), 8, true},
     };
     uintptr_t start = (uintptr_t)__start_teapot_protected_bss;
     uintptr_t end = (uintptr_t)__stop_teapot_protected_bss;
-    assert(end - start == sizeof(memory_history) + sizeof(guard_list) + sizeof(scratchpad));
+    assert(end - start == sizeof(memory_history) + sizeof(checkpoint_target_metadata) +
+           sizeof(guard_list) + sizeof(scratchpad) + sizeof(max_checkpoints));
     for (size_t i = 0; i < sizeof(objects) / sizeof(objects[0]); i++) {
         uintptr_t address = (uintptr_t)objects[i].address;
         assert(start <= address && address + objects[i].size <= end);
-        assert(address % 16 == 0);
+        assert(address % objects[i].alignment == 0);
+        if (!objects[i].zeroed)
+            continue;
         const unsigned char *bytes = objects[i].address;
         for (size_t offset = 0; offset < objects[i].size; offset++) {
 #if defined(__riscv) && __riscv_xlen == 64
@@ -234,6 +242,11 @@ static void check_storage(void) {
             assert(bytes[offset] == 0);
         }
     }
+    for (size_t offset = 0; offset < CHECKPOINT_TARGET_METADATA_SIZE; offset += 8)
+        if (offset != CHECKPOINT_TARGET_BRANCH_COUNTER_ADDR &&
+                offset != CHECKPOINT_TARGET_FIXED_REG0_SOURCE &&
+                offset != CHECKPOINT_TARGET_FIXED_REG1_SOURCE)
+            assert(checkpoint_target_metadata[offset / 8] == 0);
 #if defined(__riscv) && __riscv_xlen == 64
     uintptr_t tp;
     __asm__ volatile("mv %0, tp" : "=r"(tp));

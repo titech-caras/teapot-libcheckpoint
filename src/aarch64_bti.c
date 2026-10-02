@@ -43,8 +43,18 @@ LIBCHECKPOINT_ASSERT_PROTECTED(bti_active);
 LIBCHECKPOINT_ASSERT_PROTECTED(teapot_bti_normal_resumes);
 LIBCHECKPOINT_ASSERT_PROTECTED(teapot_bti_rollbacks);
 
-/* Window bounds for report-site patching; zero until activation succeeds. */
-uint64_t teapot_bti_text_lo, teapot_bti_text_hi, teapot_bti_copy_lo, teapot_bti_copy_hi;
+/* Window bounds for report-site patching; zero until activation succeeds.
+ * make_report_call_nop reads them while a window executes, so they are
+ * protected like every other runtime word: a speculative wild store into them
+ * hits ASan poison instead of switching the copy's guard off on one page. */
+uint64_t teapot_bti_text_lo LIBCHECKPOINT_PROTECTED_SECTION;
+uint64_t teapot_bti_text_hi LIBCHECKPOINT_PROTECTED_SECTION;
+uint64_t teapot_bti_copy_lo LIBCHECKPOINT_PROTECTED_SECTION;
+uint64_t teapot_bti_copy_hi LIBCHECKPOINT_PROTECTED_SECTION;
+LIBCHECKPOINT_ASSERT_PROTECTED(teapot_bti_text_lo);
+LIBCHECKPOINT_ASSERT_PROTECTED(teapot_bti_text_hi);
+LIBCHECKPOINT_ASSERT_PROTECTED(teapot_bti_copy_lo);
+LIBCHECKPOINT_ASSERT_PROTECTED(teapot_bti_copy_hi);
 
 static void fail(const char *reason) {
     fprintf(stderr, "[teapot-bti] refusing activation: %s\n", reason);

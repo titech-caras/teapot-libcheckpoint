@@ -19,6 +19,24 @@ if(BUILD_TESTING)
         COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/dift_layout_range_limit.cmake")
     add_test(NAME checkpoint_optional_zlib_required
         COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/optional_zlib_required.cmake")
+    if(CMAKE_NM)
+        foreach(archive IN ITEMS checkpoint checkpoint_nested
+                                 checkpoint_dift_math_wrappers checkpoint_dift_zlib_wrappers)
+            if(NOT TARGET ${archive})
+                continue()
+            endif()
+            set(runtime OFF)
+            if(archive MATCHES "^checkpoint(_nested)?$")
+                set(runtime ON)
+            endif()
+            add_test(NAME ${archive}_protected_globals
+                COMMAND "${CMAKE_COMMAND}" "-DNM=${CMAKE_NM}" "-DLIBRARY=$<TARGET_FILE:${archive}>"
+                    "-DRUNTIME=${runtime}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_protected_globals.cmake")
+        endforeach()
+    else()
+        message(WARNING "CMAKE_NM is not set; the protected-globals tests are not registered")
+    endif()
 
     add_executable(checkpoint_dift_mapping_test tests/dift_mapping.c)
     teapot_configure_checkpoint_target(checkpoint_dift_mapping_test)
@@ -120,7 +138,7 @@ if(BUILD_TESTING)
             add_test(NAME checkpoint_report_poisoned_${check}
                 COMMAND checkpoint_report_pages_asan_test ${check})
             set_tests_properties(checkpoint_report_poisoned_${check} PROPERTIES
-                ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
+                ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0" TIMEOUT 30)
         endforeach()
     endif()
 
@@ -141,6 +159,37 @@ if(BUILD_TESTING)
         COMMAND checkpoint_signal_handler_test unmanaged)
     add_test(NAME checkpoint_signal_user_faults
         COMMAND checkpoint_signal_handler_test user-faults)
+    if(TEAPOT_AARCH64_TAG_STORAGE STREQUAL "shadow" AND TEAPOT_TEST_ASAN_AVAILABLE)
+        # The runtime is not ASan-instrumented, but ASan's interceptors check the
+        # poisoned protected state passed to them. Build the handler the way that
+        # turns a struct sigaction copy into a memcpy call: GCC does so at -Os on
+        # AArch64 and RISC-V, and on x64 with the libcall string strategy; clang
+        # does so at -O0 (and at -O2 on x64 and RISC-V).
+        add_executable(checkpoint_signal_handler_asan_test
+            tests/signal_handler.c src/signal_handler.c)
+        teapot_configure_checkpoint_target(checkpoint_signal_handler_asan_test)
+        target_compile_definitions(checkpoint_signal_handler_asan_test PRIVATE SIGNAL_TEST_ASAN)
+        target_compile_options(checkpoint_signal_handler_asan_test PRIVATE -fno-pie)
+        if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+            target_compile_options(checkpoint_signal_handler_asan_test PRIVATE -Os)
+            if(CHECKPOINT_ARCH_NAME STREQUAL "x64")
+                target_compile_options(checkpoint_signal_handler_asan_test PRIVATE
+                    -mstringop-strategy=libcall)
+            endif()
+        else()
+            target_compile_options(checkpoint_signal_handler_asan_test PRIVATE -O0)
+        endif()
+        target_link_options(checkpoint_signal_handler_asan_test PRIVATE
+            -Wl,--wrap=fprintf -Wl,--wrap=strsignal -no-pie -fsanitize=address)
+        # A timeout, because an ASan report can stall in clang's external
+        # symbolizer instead of failing.
+        foreach(check IN ITEMS forward registration user-faults)
+            add_test(NAME checkpoint_signal_poisoned_${check}
+                COMMAND checkpoint_signal_handler_asan_test ${check})
+            set_tests_properties(checkpoint_signal_poisoned_${check} PROPERTIES
+                ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0" TIMEOUT 30)
+        endforeach()
+    endif()
 
     foreach(mode IN ITEMS default nested)
         set(entry_test checkpoint_entry_${mode}_test)

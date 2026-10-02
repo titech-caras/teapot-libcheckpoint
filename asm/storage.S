@@ -22,7 +22,11 @@
 	.endm
 
 	RESERVE memory_history, MEM_HISTORY_LEN*MEM_HISTORY_ENTRY_SIZE, 16
+	/* Rollback targets and the depth limit: runtime state like the rest. */
+	RESERVE checkpoint_target_metadata, CHECKPOINT_TARGET_METADATA_SIZE, 16
 	RESERVE guard_list, GUARD_LIST_LEN*4, 16
 	RESERVE scratchpad, SCRATCHPAD_SIZE, 16
+	/* Last, so its 8-byte alignment leaves no gap between the objects. */
+	RESERVE max_checkpoints, 8, 8
 
 	.section .note.GNU-stack,"",ELF_PROGBITS

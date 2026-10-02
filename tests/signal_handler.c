@@ -13,6 +13,11 @@
 #include "checkpoint.h"
 #include "signal_handler.h"
 
+#ifdef SIGNAL_TEST_ASAN
+#include <sanitizer/asan_interface.h>
+extern char __start_teapot_protected[], __stop_teapot_protected[];
+#endif
+
 scratchpad_t scratchpad;
 uint64_t checkpoint_cnt;
 volatile uint64_t in_restore_memlog;
@@ -364,6 +369,12 @@ static void check_post_setup_registration(void) {
 
 int main(int argc, char **argv) {
     assert(argc == 2);
+#ifdef SIGNAL_TEST_ASAN
+    /* As at startup, the protected state is poisoned before the handlers are
+     * installed; ASan's interceptors then reject any access through them. */
+    __asan_poison_memory_region(__start_teapot_protected,
+                                __stop_teapot_protected - __start_teapot_protected);
+#endif
     if (strcmp(argv[1], "context") == 0)
         check_contexts();
     else if (strcmp(argv[1], "forward") == 0) {
