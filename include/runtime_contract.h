@@ -12,12 +12,21 @@
  * rewritten module.
  *
  * Records. Each archive carries one runtime record in section
- * libcheckpoint_contract, labelled __libcheckpoint_contract_v<version>_<fingerprint>.
- * Each rewritten module carries one module record in section teapot_contract
- * whose anchor field holds the address of that label, so linking an archive
- * with another ABI fails with an undefined reference. A note in
- * .note.teapot.contract refers to the module record, which keeps it under
- * --gc-sections (linkers keep allocated notes).
+ * libcheckpoint_contract, labelled __libcheckpoint_contract_v<version>_<fingerprint>,
+ * whose anchor field refers to the start-up check, so extracting the record
+ * from the archive also extracts the check. Each rewritten module carries one
+ * module record in section teapot_contract whose anchor field holds the
+ * address of that label, so linking an archive with another ABI fails with an
+ * undefined reference. A note in .note.teapot.contract refers to the module
+ * record, which keeps it under --gc-sections (linkers keep allocated notes).
+ *
+ * At start-up the runtime's .preinit_array entry checks every module record
+ * (checkpoint.c): before every constructor in .init_array, but after the
+ * .preinit_array entries of objects linked before the runtime (on RISC-V the
+ * C library's load_gp, rewritten with the program) and after IFUNC resolvers.
+ * It cannot tell how many modules a program has: a module without any record
+ * linked next to one with a record is not noticed here (validate_link.py
+ * counts the records of a component link).
  *
  * Every ABI fact both sides use is compared for equality, including slots of
  * the AArch64 shadow stack and runtime-internal report regions that only need
@@ -101,7 +110,7 @@
 #ifndef __ASSEMBLER__
 #include <stdint.h>
 
-/* Followed by json_size bytes of JSON, then
+/* Followed by json_size bytes of JSON (none in the records tests make), then
  * zeros up to a multiple of eight bytes. */
 struct libcheckpoint_contract_record {
     uint32_t magic;
@@ -111,7 +120,8 @@ struct libcheckpoint_contract_record {
     uint32_t json_size;
     uint64_t fingerprint;
     uint64_t capabilities;
-    /* Module records: the runtime record's anchor label. Runtime records: zero. */
+    /* Module records: the runtime record's anchor label. Runtime records: the
+     * start-up check, libcheckpoint_check_runtime_contract. */
     const void *anchor;
 };
 
@@ -121,4 +131,6 @@ _Static_assert(sizeof(void *) == 8, "contract records assume 64-bit pointers");
 
 /* The label on this archive's own record, beside its fingerprinted anchor. */
 extern const struct libcheckpoint_contract_record libcheckpoint_runtime_contract;
+/* The start-up check of every module record (checkpoint.c). */
+void libcheckpoint_check_runtime_contract(void);
 #endif

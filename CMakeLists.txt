@@ -38,6 +38,63 @@ if(BUILD_TESTING)
         message(WARNING "CMAKE_NM is not set; the protected-globals tests are not registered")
     endif()
 
+    # The start-up contract check (runtime_contract.h). Each program links the
+    # runtime with one module record built with DEFINITIONS, or with none, and
+    # a constructor that a refused program must never reach.
+    function(teapot_add_contract_test name expected)
+        cmake_parse_arguments(CONTRACT "NO_RECORD;ACCEPTED" "" "DEFINITIONS;SOURCES" ${ARGN})
+        set(target checkpoint_contract_${name}_test)
+        set(sources tests/contract_check.c ${CHECKPOINT_RUNTIME_SOURCES})
+        if(NOT CONTRACT_NO_RECORD)
+            list(APPEND sources tests/contract_module_record.c)
+        endif()
+        list(APPEND sources ${CONTRACT_SOURCES})
+        add_executable(${target} ${sources})
+        teapot_configure_checkpoint_target(${target})
+        target_compile_definitions(${target} PRIVATE ${CONTRACT_DEFINITIONS})
+        target_compile_options(${target} PRIVATE -fno-pie)
+        target_link_options(${target} PRIVATE -no-pie)
+        if(CHECKPOINT_ARCH_NAME STREQUAL "riscv64")
+            target_link_options(${target} PRIVATE -Wl,--no-relax)
+        endif()
+        if(CONTRACT_ACCEPTED)
+            add_test(NAME checkpoint_contract_${name} COMMAND ${target})
+            set_tests_properties(checkpoint_contract_${name} PROPERTIES
+                PASS_REGULAR_EXPRESSION "${expected}")
+        else()
+            add_test(NAME checkpoint_contract_${name}
+                COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:${target}>"
+                    "-DEMULATOR=${CMAKE_CROSSCOMPILING_EMULATOR}" "-DEXPECTED=${expected}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/expect_refusal.cmake")
+        endif()
+        set_tests_properties(checkpoint_contract_${name} PROPERTIES TIMEOUT 60)
+    endfunction()
+    teapot_add_contract_test(accepted "contract accepted" ACCEPTED)
+    teapot_add_contract_test(nested_accepted "contract accepted" ACCEPTED
+        DEFINITIONS ENABLE_NESTED_SPECULATION
+            TEST_CONTRACT_REQUIRED=LIBCHECKPOINT_CAPABILITY_NESTED)
+    teapot_add_contract_test(missing "carries no Teapot contract record" NO_RECORD)
+    teapot_add_contract_test(fingerprint "a runtime with another ABI"
+        DEFINITIONS TEST_CONTRACT_FINGERPRINT=1)
+    teapot_add_contract_test(version "another contract version"
+        DEFINITIONS TEST_CONTRACT_VERSION=999)
+    teapot_add_contract_test(capability "capabilities this archive lacks: nested"
+        DEFINITIONS TEST_CONTRACT_REQUIRED=LIBCHECKPOINT_CAPABILITY_NESTED)
+    teapot_add_contract_test(anchor "does not refer to this runtime"
+        DEFINITIONS TEST_CONTRACT_WRONG_ANCHOR)
+    teapot_add_contract_test(magic "malformed module contract record"
+        DEFINITIONS TEST_CONTRACT_MAGIC=0x12345678)
+    teapot_add_contract_test(second_record "a runtime with another ABI"
+        SOURCES tests/contract_second_record.c)
+    # Malformed record layouts: the JSON runs past the section, the section ends
+    # inside a record's padding, and a record off the 8-byte grid.
+    teapot_add_contract_test(truncated "truncated module contract record"
+        DEFINITIONS TEST_CONTRACT_JSON_SIZE=4096)
+    teapot_add_contract_test(truncated_padding "truncated module contract record"
+        DEFINITIONS TEST_CONTRACT_JSON_SIZE=1 TEST_CONTRACT_JSON_BYTES=1)
+    teapot_add_contract_test(mixed_alignment "(truncated|malformed) module contract record" NO_RECORD
+        SOURCES tests/contract_mixed_alignment.c)
+
     add_executable(checkpoint_dift_mapping_test tests/dift_mapping.c)
     teapot_configure_checkpoint_target(checkpoint_dift_mapping_test)
     add_test(NAME checkpoint_dift_mapping COMMAND checkpoint_dift_mapping_test)
@@ -56,7 +113,8 @@ if(BUILD_TESTING)
         # This supported configuration has prioritized depth but no initial
         # full-depth burst. In particular it must handle counter wrap to zero.
         add_executable(checkpoint_entry_priority_test
-            tests/checkpoint_entry.c tests/checkpoint_entry.S ${CHECKPOINT_RUNTIME_SOURCES})
+            tests/checkpoint_entry.c tests/checkpoint_entry.S tests/contract_module_record.c
+            ${CHECKPOINT_RUNTIME_SOURCES})
         teapot_configure_checkpoint_target(checkpoint_entry_priority_test)
         target_compile_definitions(checkpoint_entry_priority_test PRIVATE
             SPECFUZZ_PRIORITIZED_SIMULATION TIME)
@@ -91,7 +149,10 @@ if(BUILD_TESTING)
     endif()
 
     if(CHECKPOINT_ARCH_NAME STREQUAL "aarch64" AND TEAPOT_AARCH64_TAG_STORAGE STREQUAL "mte")
-        add_executable(checkpoint_mte_setup_test tests/mte_setup.c asm/storage.S)
+        # mte_setup.c includes checkpoint.c, whose start-up check needs this
+        # archive's runtime record and a module record.
+        add_executable(checkpoint_mte_setup_test tests/mte_setup.c asm/storage.S
+            "${LIBCHECKPOINT_CONTRACT_RECORD_SOURCE}" tests/contract_module_record.c)
         teapot_configure_checkpoint_target(checkpoint_mte_setup_test)
         target_compile_options(checkpoint_mte_setup_test PRIVATE -ffunction-sections -fdata-sections)
         target_link_options(checkpoint_mte_setup_test PRIVATE -Wl,--gc-sections)
@@ -199,7 +260,7 @@ if(BUILD_TESTING)
             list(REVERSE entry_runtime_sources)
         endif()
         add_executable(${entry_test}
-            tests/checkpoint_entry.c tests/checkpoint_entry.S
+            tests/checkpoint_entry.c tests/checkpoint_entry.S tests/contract_module_record.c
             ${entry_runtime_sources})
         teapot_configure_checkpoint_target(${entry_test})
         target_compile_definitions(${entry_test} PRIVATE TIME COVERAGE)
@@ -216,6 +277,15 @@ if(BUILD_TESTING)
         target_link_options(${entry_test} PRIVATE -no-pie)
         if(CHECKPOINT_ARCH_NAME STREQUAL "riscv64")
             target_link_options(${entry_test} PRIVATE -Wl,--no-relax)
+            target_sources(${entry_test} PRIVATE
+                tests/checkpoint_riscv64_float.c tests/checkpoint_riscv64_float.S)
+            # Registered either way: without the FP state the rollback leaves
+            # the speculative values, and the test must notice.
+            add_test(NAME checkpoint_entry_${mode}_riscv64_float COMMAND ${entry_test} riscv64-float)
+            set_tests_properties(checkpoint_entry_${mode}_riscv64_float PROPERTIES TIMEOUT 10)
+            if(NOT TEAPOT_ENABLE_RISCV_FLOAT_STATE)
+                set_tests_properties(checkpoint_entry_${mode}_riscv64_float PROPERTIES WILL_FAIL TRUE)
+            endif()
         endif()
         foreach(check IN ITEMS capacity timing storage memlog queued-tags assertions)
             add_test(NAME checkpoint_entry_${mode}_${check}
@@ -277,7 +347,8 @@ endif()
 if(BUILD_TESTING AND CHECKPOINT_ARCH_NAME STREQUAL "x64")
     add_executable(checkpoint_x64_simd_normal_path_test
         tests/checkpoint_x64_simd_normal_path.c
-        tests/checkpoint_x64_simd_normal_path.S ${CHECKPOINT_RUNTIME_SOURCES})
+        tests/checkpoint_x64_simd_normal_path.S tests/contract_module_record.c
+        ${CHECKPOINT_RUNTIME_SOURCES})
     teapot_configure_checkpoint_target(checkpoint_x64_simd_normal_path_test)
     target_compile_definitions(checkpoint_x64_simd_normal_path_test PRIVATE COVERAGE)
     target_compile_options(checkpoint_x64_simd_normal_path_test PRIVATE -fno-pie)
@@ -288,7 +359,7 @@ if(BUILD_TESTING AND CHECKPOINT_ARCH_NAME STREQUAL "x64")
 
     add_executable(checkpoint_x64_vector_cases_test
         tests/checkpoint_x64_vector_cases.c tests/checkpoint_x64_vector_cases.S
-        ${CHECKPOINT_RUNTIME_SOURCES})
+        tests/contract_module_record.c ${CHECKPOINT_RUNTIME_SOURCES})
     teapot_configure_checkpoint_target(checkpoint_x64_vector_cases_test)
     target_compile_definitions(checkpoint_x64_vector_cases_test PRIVATE COVERAGE ENABLE_NESTED_SPECULATION)
     target_compile_options(checkpoint_x64_vector_cases_test PRIVATE -fno-pie)
@@ -300,7 +371,7 @@ endif()
 if(BUILD_TESTING AND CHECKPOINT_ARCH_NAME STREQUAL "x64" AND TEAPOT_TEST_ASAN_AVAILABLE)
     add_executable(checkpoint_x64_xsave_report_test
         tests/checkpoint_x64_xsave_report.c
-        tests/checkpoint_x64_xsave_report.S)
+        tests/checkpoint_x64_xsave_report.S tests/contract_module_record.c)
     teapot_configure_checkpoint_target(checkpoint_x64_xsave_report_test)
     target_link_libraries(checkpoint_x64_xsave_report_test PRIVATE checkpoint)
     target_compile_options(checkpoint_x64_xsave_report_test PRIVATE -fno-pie)

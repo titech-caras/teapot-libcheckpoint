@@ -368,7 +368,8 @@ LIBCHECKPOINT_CONTRACT_ANCHOR:
 \t.4byte ${_record_size}
 \t.8byte LIBCHECKPOINT_CONTRACT_FINGERPRINT
 \t.8byte LIBCHECKPOINT_RUNTIME_CAPABILITIES
-\t.8byte 0
+\t/* Extracting this record from the archive extracts the check too. */
+\t.8byte libcheckpoint_check_runtime_contract
 ${_record_bytes}\t.balign 8, 0
 \t.size libcheckpoint_runtime_contract, . - libcheckpoint_runtime_contract
 \t.size LIBCHECKPOINT_CONTRACT_ANCHOR, . - LIBCHECKPOINT_CONTRACT_ANCHOR

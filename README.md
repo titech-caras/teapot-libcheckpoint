@@ -25,11 +25,10 @@ cmake -S libcheckpoint -B build-libcheckpoint \
 cmake --build build-libcheckpoint
 ```
 
-The runtime DIFT layout must match the Teapot instrumentation
-`--dift-layout`.  Useful profiles include `x64-la48`, `x64-la48-asan-new`,
-`aarch64-vma39`, `aarch64-vma42`, `riscv64-sv39`, and `riscv64-sv48`.
-The layout profiles are defined in `cmake/DiftLayoutData.cmake`; the Teapot
-Python instrumentation reads that same file.
+The DIFT layout is a runtime build option.  Useful profiles include `x64-la48`,
+`x64-la48-asan-new`, `aarch64-vma39`, `aarch64-vma42`, `riscv64-sv39`, and
+`riscv64-sv48`, defined in `cmake/DiftLayoutData.cmake`.  Teapot takes the
+selected layout from the runtime contract below.
 Both configuration paths reject overlapping application/DIFT regions and DIFT
 regions that intersect ASan shadow. Application ranges include some ASan-backed
 addresses because instrumentation can also propagate tags for those accesses.
@@ -41,6 +40,41 @@ The default `checkpoint` target fixes the runtime depth to one checkpoint.  Pass
 then link that target with Teapot output produced with
 `--enable-nested-speculation`.
 The nested branch-count heuristic is capped at `MAX_CHECKPOINTS`.
+
+## Runtime contract
+
+Configuring writes `libcheckpoint.contract.json` (and
+`libcheckpoint_nested.contract.json`) next to each archive, and `cmake --install`
+installs them beside the archives. Each holds:
+
+- `abi`: every layout fact that Teapot's emitted code and the runtime share,
+  such as scratchpad, memory-history and checkpoint-metadata offsets, the DIFT
+  layout with the application ranges its shadow covers, tag sizes, values and
+  register indices, tag storage, report frames and the AArch64 shadow-stack
+  slots. A probe compiled with the target compiler reads them from the headers,
+  `sizeof` and `offsetof` (it is never run, so cross builds work). The
+  `fingerprint` hashes this section.
+- `capabilities`: what the archive provides (nested speculation, BTI+PAC, DIFT
+  shadow set-up, how much x64 vector state it saves at least: full, AVX or SSE,
+  coverage, RISC-V FP state). Teapot requires the RISC-V FP state for every
+  RISC-V rewrite with checkpoints: without it a rollback does not restore the
+  floating-point registers or FCSR (`-DTEAPOT_ENABLE_RISCV_FLOAT_STATE=ON`).
+- `runtime` and `provenance`: facts of the runtime alone and the build, which
+  are never compared.
+
+Pass the file of the archive you link to Teapot with `--runtime-contract`.
+Teapot refuses an ABI it does not emit, naming each field, and options the
+archive cannot serve. Each rewritten module then carries a record that refers to
+`__libcheckpoint_contract_v1_<fingerprint>`, which only an archive with the same
+ABI defines, so a mismatched link fails; a note keeps the record under
+`--gc-sections`. At start-up the runtime refuses a program with no record,
+another fingerprint or a capability this archive lacks. It checks from its
+`.preinit_array` entry, so before every `.init_array` constructor, but after the
+`.preinit_array` entries of objects linked before it and after IFUNC resolvers
+(`include/runtime_contract.h`).
+Conventions that are not numbers, such as report-call clobbers and the
+checkpoint entry protocol, are covered by the contract version: changing one
+means bumping `LIBCHECKPOINT_CONTRACT_VERSION` in the runtime and in Teapot.
 
 ### Software-mode layout
 
@@ -195,20 +229,15 @@ qemu-aarch64-mte -cpu max -R 0x40000000000 -s 33554432 -L /opt/aarch64-mte-sysro
 The AArch64 first-spill fallback uses fixed shadow-stack frames below the
 application stack.  Instrumentation passes that can nest must use distinct
 frame offsets and scratchpad save windows.
-Size and slot constants are shared in `include/aarch64_shadow_stack.h` (8 MiB
-by default). To use an alternate header, select the same file at both stages:
+Size and slot constants are defined in `include/aarch64_shadow_stack.h` (8 MiB
+by default). `-DTEAPOT_AARCH64_SHADOW_STACK_CONFIG=/absolute/path/shadow_stack.h`
+selects an alternate header; Teapot's table (`teapot/configs/slots.py`) must then
+hold the same values, or the contract check refuses the rewrite and names the
+slots that differ.
 
-```shell
-cmake -S libcheckpoint -B build-libcheckpoint \
-  -DTEAPOT_AARCH64_SHADOW_STACK_CONFIG=/absolute/path/shadow_stack.h
-TEAPOT_AARCH64_SHADOW_STACK_CONFIG=/absolute/path/shadow_stack.h teapot input.gtirb output.gtirb
-```
-
-`cmake --install` installs the selected header in `include/` and the shared
-DIFT profiles in `share/libcheckpoint/DiftLayoutData.cmake`. Set Python's
-`TEAPOT_AARCH64_SHADOW_STACK_CONFIG` and `TEAPOT_DIFT_LAYOUT_FILE` to these files
-when Teapot is installed separately. The `checkpoint-config` install component
-can export just these two files; it does not build or install the runtime archive.
+`cmake --install` installs the selected header in `include/` and the DIFT
+profiles in `share/libcheckpoint/DiftLayoutData.cmake` (the `checkpoint-config`
+install component exports just these two files).
 
 Keep numeric definitions decimal (no leading zeroes) and spill slots disjoint. The current
 single-instruction SP adjustment supports 1-4095 multiples of 4096 bytes;

@@ -1,4 +1,5 @@
 #include "checkpoint.h"
+#include "runtime_contract.h"
 #include "signal_handler.h"
 #include "dift_support.h"
 
@@ -399,7 +400,92 @@ static void initialize_shadow_stack_state() {
 #endif
 }
 
+/* Module records of the rewritten code: one per instrumented module. */
+extern const char __start_teapot_contract[] __attribute__((weak));
+extern const char __stop_teapot_contract[] __attribute__((weak));
+
+static const char *const contract_capability_names[] = {
+    "nested", "aarch64_bti_pac", "dift_runtime", "x64_vector_full", "coverage",
+    "riscv64_float_state", "x64_vector_sse", "x64_vector_avx",
+};
+_Static_assert((1u << (sizeof(contract_capability_names) / sizeof(*contract_capability_names))) - 1 ==
+               LIBCHECKPOINT_CAPABILITIES_KNOWN, "name every contract capability");
+
+__attribute__((noreturn))
+static void reject_contract(const char *problem, uint64_t found, uint64_t expected) {
+    fprintf(stderr, "libcheckpoint: %s (module record 0x%016" PRIx64 ", runtime 0x%016" PRIx64 ").\n"
+            "Rewrite the program with this runtime's lib<archive>.contract.json, "
+            "or link the runtime it was rewritten for.\n", problem, found, expected);
+    abort();
+}
+
+/*
+ * Refuse to start unless every rewritten module was built for this runtime:
+ * the same contract version and ABI fingerprint, and only capabilities this
+ * archive provides (runtime_contract.h). A program without any module record
+ * is refused too, since nothing then shows that its code matches. This runs
+ * from .preinit_array, before every .init_array constructor (runtime_contract.h
+ * says what can run earlier), and maps nothing.
+ */
+void libcheckpoint_check_runtime_contract(void) {
+    const struct libcheckpoint_contract_record *runtime = &libcheckpoint_runtime_contract;
+    const char *cursor = __start_teapot_contract, *end = __stop_teapot_contract;
+    size_t modules = 0;
+
+    if (cursor == NULL || end == NULL || cursor >= end) {
+        fputs("libcheckpoint: this program carries no Teapot contract record, so nothing shows that "
+              "its instrumentation matches this runtime. Rewrite it with a current Teapot.\n", stderr);
+        abort();
+    }
+    while (cursor < end) {
+        const struct libcheckpoint_contract_record *record = (const void *)cursor;
+        size_t remaining = (size_t)(end - cursor), size;
+
+        if (((uintptr_t)cursor & 7) != 0 || remaining < sizeof(uint64_t))
+            reject_contract("misaligned or truncated module contract record", remaining, sizeof(*record));
+        if (*(const uint64_t *)cursor == 0) {
+            /* Alignment padding between two modules' records. */
+            cursor += sizeof(uint64_t);
+            continue;
+        }
+        if (remaining < sizeof(*record))
+            reject_contract("truncated module contract record", remaining, sizeof(*record));
+        if (record->magic != LIBCHECKPOINT_CONTRACT_MAGIC ||
+            record->kind != LIBCHECKPOINT_CONTRACT_KIND_MODULE ||
+            record->header_size != LIBCHECKPOINT_CONTRACT_HEADER_SIZE)
+            reject_contract("malformed module contract record", record->magic, LIBCHECKPOINT_CONTRACT_MAGIC);
+        size = ((size_t)record->header_size + record->json_size + 7) & ~(size_t)7;
+        if (size > remaining)
+            reject_contract("truncated module contract record", size, remaining);
+        if (record->version != runtime->version)
+            reject_contract("the program was rewritten for another contract version",
+                            record->version, runtime->version);
+        if (record->fingerprint != runtime->fingerprint)
+            reject_contract("the program was rewritten for a runtime with another ABI",
+                            record->fingerprint, runtime->fingerprint);
+        if (record->anchor != runtime)
+            reject_contract("a module record does not refer to this runtime",
+                            (uint64_t)(uintptr_t)record->anchor, (uint64_t)(uintptr_t)runtime);
+        uint64_t missing = record->capabilities & ~runtime->capabilities;
+        if (missing) {
+            fputs("libcheckpoint: the program needs runtime capabilities this archive lacks:", stderr);
+            for (size_t bit = 0; bit < sizeof(contract_capability_names) / sizeof(*contract_capability_names); bit++)
+                if (missing & (UINT64_C(1) << bit))
+                    fprintf(stderr, " %s", contract_capability_names[bit]);
+            if (missing & ~(uint64_t)LIBCHECKPOINT_CAPABILITIES_KNOWN)
+                fprintf(stderr, " unknown 0x%" PRIx64, missing & ~(uint64_t)LIBCHECKPOINT_CAPABILITIES_KNOWN);
+            fputs(".\nLink the archive built with them (for nested speculation, checkpoint_nested).\n", stderr);
+            abort();
+        }
+        cursor += size;
+        modules++;
+    }
+    if (modules == 0)
+        reject_contract("no module contract record in the record section", 0, runtime->fingerprint);
+}
+
 static void initialize_instrumentation_state_early() {
+    libcheckpoint_check_runtime_contract();
     initialize_first_spill_state();
     initialize_shadow_stack_state();
 #ifndef DISABLE_DIFT_RUNTIME

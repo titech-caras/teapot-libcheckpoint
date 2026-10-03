@@ -19,6 +19,10 @@ extern uint64_t max_checkpoints;
 extern uintptr_t checkpoint_target_metadata[CHECKPOINT_TARGET_METADATA_SIZE / 8];
 extern int checkpoint_entry_probe(void *stack_top);
 extern int checkpoint_rollback_probe(void *stack_top);
+#if defined(__riscv)
+/* Only the entry tests link tests/checkpoint_riscv64_float.c. */
+extern void check_riscv64_float(void) __attribute__((weak));
+#endif
 #if defined(__x86_64__)
 extern void check_x64_df(void);
 #endif
@@ -393,6 +397,12 @@ int main(int argc, char **argv) {
 #if defined(__x86_64__)
     else if (strcmp(argv[1], "df") == 0)
         check_x64_df();
+#endif
+#if defined(__riscv)
+    else if (strcmp(argv[1], "riscv64-float") == 0) {
+        assert(check_riscv64_float != NULL);
+        check_riscv64_float();
+    }
 #endif
 #if defined(__aarch64__)
     else if (strcmp(argv[1], "report") == 0)
