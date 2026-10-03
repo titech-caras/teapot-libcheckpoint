@@ -14,6 +14,8 @@ endif()
 option(TEAPOT_ENABLE_COVERAGE "Enable honggfuzz coverage callbacks" ${_coverage_default})
 set(TEAPOT_X64_VECTOR_STATE "auto" CACHE STRING "Checkpoint vector state: auto, xmm0-7, sse, avx, full")
 set_property(CACHE TEAPOT_X64_VECTOR_STATE PROPERTY STRINGS auto xmm0-7 sse avx full)
+# The index is TEAPOT_X64_VECTOR_MODE: 0 keeps each checkpoint site's choice,
+# 1-4 are the LIBCHECKPOINT_X64_VECTOR_* values of checkpoint.h.
 set(_vector_modes auto xmm0-7 sse avx full)
 list(FIND _vector_modes "${TEAPOT_X64_VECTOR_STATE}" _vector_mode)
 if(_vector_mode EQUAL -1)

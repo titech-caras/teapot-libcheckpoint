@@ -65,7 +65,7 @@ LIBCHECKPOINT_ASSERT_PROTECTED(processor_xsave_mask);
  * full processor vector state. A fixed TEAPOT_X64_VECTOR_STATE overrides every
  * site's choice. */
 uint64_t checkpoint_vector_mode LIBCHECKPOINT_PROTECTED_SECTION =
-    TEAPOT_X64_VECTOR_MODE ? TEAPOT_X64_VECTOR_MODE : 4;
+    TEAPOT_X64_VECTOR_MODE ? TEAPOT_X64_VECTOR_MODE : LIBCHECKPOINT_X64_VECTOR_FULL;
 uint64_t checkpoint_xsave_mask LIBCHECKPOINT_PROTECTED_SECTION = 0;
 uint64_t processor_has_xsaveopt LIBCHECKPOINT_PROTECTED_SECTION = 0;
 LIBCHECKPOINT_ASSERT_PROTECTED(checkpoint_vector_mode);
@@ -160,13 +160,14 @@ static uint64_t checkpoint_read_timer() {
  * future tile registers while still covering x87, XMM, YMM, opmask, and ZMM.
  */
 static void select_checkpoint_vector_mask(void) {
-    uint64_t requested = checkpoint_vector_mode == 2 ? 3 :
-                         checkpoint_vector_mode == 3 ? 7 : UINT64_MAX;
+    uint64_t requested = checkpoint_vector_mode == LIBCHECKPOINT_X64_VECTOR_SSE ? 3 :
+                         checkpoint_vector_mode == LIBCHECKPOINT_X64_VECTOR_AVX ? 7 : UINT64_MAX;
     checkpoint_xsave_mask = processor_xsave_mask & requested;
 }
 
 void libcheckpoint_set_vector_state(unsigned mode) {
-    if (mode < 1 || mode > 4 || checkpoint_cnt || libcheckpoint_enabled) {
+    if (mode < LIBCHECKPOINT_X64_VECTOR_XMM0_7 || mode > LIBCHECKPOINT_X64_VECTOR_FULL ||
+        checkpoint_cnt || libcheckpoint_enabled) {
         fputs("Invalid or late checkpoint vector-state selection\n", stderr);
         abort();
     }

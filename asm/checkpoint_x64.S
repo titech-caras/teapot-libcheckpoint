@@ -138,8 +138,6 @@
  * whose reserved header bytes remain zero; the scratchpad is still used only
  * for the report call stack and the tag spill.
  */
-#define X64_REPORT_CALL_STACK_OFFSET (SCRATCHPAD_SIZE - 32768)
-#define X64_REPORT_TAG_OFFSET (SCRATCHPAD_SIZE - 64)
 
 .macro COPY_DIFT_TAGS ckpt
 #ifdef ENABLE_DIFT
@@ -309,9 +307,9 @@ DEF_REPORT_GADGET_X64_PRESERVE KASPER_PORT
 	X64_SWITCH_TO_SCRATCHPAD_STACK
 	SAVE_BOOTSTRAP_REGS
 .Lcheckpoint_common\@:
-#if TEAPOT_X64_VECTOR_MODE == 1
+#if TEAPOT_X64_VECTOR_MODE == LIBCHECKPOINT_X64_VECTOR_XMM0_7
 	.set .Lvector_variant\@, 1
-#elif TEAPOT_X64_VECTOR_MODE > 1
+#elif TEAPOT_X64_VECTOR_MODE > LIBCHECKPOINT_X64_VECTOR_XMM0_7
 	.set .Lvector_variant\@, 2
 #else
 	.set .Lvector_variant\@, \variant

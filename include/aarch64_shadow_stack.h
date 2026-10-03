@@ -1,6 +1,7 @@
 #pragma once
 
-/* Shared with Python instrumentation. Use decimal literals without leading zeroes. */
+/* Teapot checks these through the runtime contract (runtime_contract.h). Use decimal
+ * literals without leading zeroes: cmake/AArch64ShadowStack.cmake reads three of them. */
 #define AARCH64_SHADOW_STACK_SIZE 8388608
 #define AARCH64_SHADOW_STACK_DIFT_OFFSET 0
 #define AARCH64_SHADOW_STACK_MEMLOG_OFFSET 64

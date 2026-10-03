@@ -44,6 +44,10 @@
 #define CHECKPOINT_TARGET_FIXED_REG0_SOURCE 32
 #define CHECKPOINT_TARGET_FIXED_REG1_SOURCE 40
 #define CHECKPOINT_TARGET_METADATA_SIZE 48
+/* A negative fixed-register source means none; Teapot writes this value. */
+#define CHECKPOINT_TARGET_FIXED_REG_NONE (-1)
+/* Each trampoline's branch counter is a uint32_t (incl, ldr w, lw). */
+#define CHECKPOINT_BRANCH_COUNTER_SIZE 4
 
 /*
  * The standard XSAVE layout needs 2432 bytes when AVX-512 state is enabled
@@ -55,6 +59,31 @@
 /* Keep the compact profile away from XSAVEOPT's persistent legacy/header
  * image when successive checkpoints use different profiles at one depth. */
 #define PROCESSOR_XMM_STATE_OFFSET (PROCESSOR_EXTENDED_STATE_SIZE - 128)
+
+/*
+ * Scratchpad storage the report wrappers use while Teapot's report sequence
+ * runs. Teapot's own report frame must stay clear of it (runtime_contract.h).
+ */
+#if defined(__x86_64__)
+#define X64_REPORT_CALL_STACK_OFFSET (SCRATCHPAD_SIZE - 32768)
+#define X64_REPORT_TAG_OFFSET (SCRATCHPAD_SIZE - 64)
+/* libcheckpoint_set_vector_state arguments. */
+#define LIBCHECKPOINT_X64_VECTOR_XMM0_7 1
+#define LIBCHECKPOINT_X64_VECTOR_SSE 2
+#define LIBCHECKPOINT_X64_VECTOR_AVX 3
+#define LIBCHECKPOINT_X64_VECTOR_FULL 4
+#elif defined(__aarch64__)
+/* Teapot stores the reported call site, access address and tag at these
+ * offsets of the report block and keeps its own x30 below the runtime's save
+ * area, which starts at AARCH64_REPORT_RUNTIME_SAVE. */
+#define AARCH64_REPORT_STATE_OFFSET (SCRATCHPAD_SIZE - 512)
+#define AARCH64_REPORT_GADGET_ADDR 0
+#define AARCH64_REPORT_ACCESS_ADDR 8
+#define AARCH64_REPORT_TAG 16
+#define AARCH64_REPORT_RUNTIME_SAVE 32
+#define AARCH64_REPORT_SIMD_STATE_OFFSET (SCRATCHPAD_SIZE - 1040)
+#define AARCH64_REPORT_CALL_STACK_OFFSET (SCRATCHPAD_SIZE - 4096)
+#endif
 
 #if defined(__x86_64__)
 #define CHECKPOINT_METADATA_SIZE 256

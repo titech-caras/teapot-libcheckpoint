@@ -6,7 +6,7 @@ get_filename_component(TEAPOT_AARCH64_SHADOW_STACK_CONFIG
 file(READ "${TEAPOT_AARCH64_SHADOW_STACK_CONFIG}" shadow_stack_config)
 
 # Old cache entries may remain in existing build directories. Never let an
-# independent override silently disagree with the header used by Python.
+# independent override silently disagree with the selected header.
 foreach(setting IN ITEMS SIZE CONTROL_OFFSET REPORT_OFFSET)
     set(old_option "TEAPOT_AARCH64_SHADOW_STACK_${setting}")
     string(REGEX MATCH "#define AARCH64_SHADOW_STACK_${setting} ([0-9]+)"

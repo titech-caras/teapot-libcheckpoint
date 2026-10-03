@@ -26,7 +26,10 @@ elseif(NOT TEAPOT_AARCH64_TAG_STORAGE STREQUAL "shadow")
     message(FATAL_ERROR "Unsupported TEAPOT_AARCH64_TAG_STORAGE=${TEAPOT_AARCH64_TAG_STORAGE}")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/RuntimeContract.cmake")
+
 set(CHECKPOINT_RUNTIME_SOURCES
+    "${LIBCHECKPOINT_CONTRACT_RECORD_SOURCE}"
     src/checkpoint.c
     asm/storage.S
     ${CHECKPOINT_ASM_SOURCE}
@@ -59,10 +62,12 @@ endfunction()
 add_library(checkpoint ${CHECKPOINT_RUNTIME_SOURCES})
 teapot_configure_checkpoint_target(checkpoint)
 install(TARGETS checkpoint ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+libcheckpoint_write_contract_manifest(checkpoint _contract_default)
 
 if(TEAPOT_BUILD_NESTED_RUNTIME)
     add_library(checkpoint_nested ${CHECKPOINT_RUNTIME_SOURCES})
     teapot_configure_checkpoint_target(checkpoint_nested)
     target_compile_definitions(checkpoint_nested PRIVATE ENABLE_NESTED_SPECULATION)
     install(TARGETS checkpoint_nested ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+    libcheckpoint_write_contract_manifest(checkpoint_nested _contract_nested)
 endif()

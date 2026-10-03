@@ -3,9 +3,6 @@
 // AArch64 indirect branches require a register. The final transfer uses x16
 // (IP0), so the architecture-specific instrumentation must reserve it there.
 #define AARCH64_FRAME_SIZE 64
-#define AARCH64_REPORT_STATE_OFFSET (SCRATCHPAD_SIZE - 512)
-#define AARCH64_REPORT_SIMD_STATE_OFFSET (SCRATCHPAD_SIZE - 1040)
-#define AARCH64_REPORT_CALL_STACK_OFFSET (SCRATCHPAD_SIZE - 4096)
 
 // Trusted checkpoint continuations are not application indirect targets.
 // RET X16 has the same register/PC effect as BR X16 but no landing requirement.
@@ -257,53 +254,53 @@ report_gadget_aarch64_preserve_\type:
 	stp	x16, x17, [sp, #AARCH64_SHADOW_STACK_REPORT_OFFSET]
 	LOAD_ADDR x16, scratchpad + AARCH64_REPORT_STATE_OFFSET
 	ldr	x17, [sp, #AARCH64_SHADOW_STACK_REPORT_OFFSET]
-	str	x17, [x16, #200]
+	str	x17, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 168)]
 	ldr	x17, [sp, #(AARCH64_SHADOW_STACK_REPORT_OFFSET + 8)]
 	add	sp, sp, #(AARCH64_SHADOW_STACK_SIZE >> 12), lsl #12
-	stp	x0, x1, [x16, #32]
-	stp	x2, x3, [x16, #48]
-	stp	x4, x5, [x16, #64]
-	stp	x6, x7, [x16, #80]
-	stp	x8, x9, [x16, #96]
-	stp	x10, x11, [x16, #112]
-	stp	x12, x13, [x16, #128]
-	stp	x14, x15, [x16, #144]
-	stp	x17, x18, [x16, #160]
-	str	x30, [x16, #176]
+	stp	x0, x1, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 0)]
+	stp	x2, x3, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 16)]
+	stp	x4, x5, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 32)]
+	stp	x6, x7, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 48)]
+	stp	x8, x9, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 64)]
+	stp	x10, x11, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 80)]
+	stp	x12, x13, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 96)]
+	stp	x14, x15, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 112)]
+	stp	x17, x18, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 128)]
+	str	x30, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 144)]
 	mov	x17, sp
-	str	x17, [x16, #184]
+	str	x17, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 152)]
 	mrs	x17, nzcv
-	str	x17, [x16, #192]
+	str	x17, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 160)]
 	LOAD_ADDR x16, scratchpad + AARCH64_REPORT_SIMD_STATE_OFFSET
 	SAVE_SIMD_STATE x16
 
 	LOAD_ADDR x16, scratchpad + AARCH64_REPORT_STATE_OFFSET
-	ldr	x0, [x16, #0]
-	ldr	x1, [x16, #8]
-	ldr	x2, [x16, #16]
+	ldr	x0, [x16, #AARCH64_REPORT_GADGET_ADDR]
+	ldr	x1, [x16, #AARCH64_REPORT_ACCESS_ADDR]
+	ldr	x2, [x16, #AARCH64_REPORT_TAG]
 	LOAD_ADDR x17, scratchpad + AARCH64_REPORT_CALL_STACK_OFFSET
 	mov	sp, x17
 	bl	report_gadget_\type
 
 	LOAD_ADDR x16, scratchpad + AARCH64_REPORT_STATE_OFFSET
-	ldr	x17, [x16, #192]
+	ldr	x17, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 160)]
 	msr	nzcv, x17
-	ldr	x17, [x16, #184]
+	ldr	x17, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 152)]
 	mov	sp, x17
 	LOAD_ADDR x16, scratchpad + AARCH64_REPORT_SIMD_STATE_OFFSET
 	RESTORE_SIMD_STATE x16
 	LOAD_ADDR x16, scratchpad + AARCH64_REPORT_STATE_OFFSET
-	ldr	x30, [x16, #176]
-	ldp	x17, x18, [x16, #160]
-	ldp	x14, x15, [x16, #144]
-	ldp	x12, x13, [x16, #128]
-	ldp	x10, x11, [x16, #112]
-	ldp	x8, x9, [x16, #96]
-	ldp	x6, x7, [x16, #80]
-	ldp	x4, x5, [x16, #64]
-	ldp	x2, x3, [x16, #48]
-	ldp	x0, x1, [x16, #32]
-	ldr	x16, [x16, #200]
+	ldr	x30, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 144)]
+	ldp	x17, x18, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 128)]
+	ldp	x14, x15, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 112)]
+	ldp	x12, x13, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 96)]
+	ldp	x10, x11, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 80)]
+	ldp	x8, x9, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 64)]
+	ldp	x6, x7, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 48)]
+	ldp	x4, x5, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 32)]
+	ldp	x2, x3, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 16)]
+	ldp	x0, x1, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 0)]
+	ldr	x16, [x16, #(AARCH64_REPORT_RUNTIME_SAVE + 168)]
 	ret
 .Lreport_gadget_aarch64_preserve_\type\()_end:
 	.size	report_gadget_aarch64_preserve_\type, .Lreport_gadget_aarch64_preserve_\type\()_end-report_gadget_aarch64_preserve_\type
