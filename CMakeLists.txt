@@ -287,7 +287,7 @@ if(BUILD_TESTING)
                 set_tests_properties(checkpoint_entry_${mode}_riscv64_float PROPERTIES WILL_FAIL TRUE)
             endif()
         endif()
-        foreach(check IN ITEMS capacity timing storage memlog queued-tags assertions)
+        foreach(check IN ITEMS capacity timing storage memlog memlog-validation memlog-order queued-tags assertions)
             add_test(NAME checkpoint_entry_${mode}_${check}
                 COMMAND ${entry_test} ${check})
             set_tests_properties(checkpoint_entry_${mode}_${check}
@@ -326,6 +326,11 @@ if(BUILD_TESTING)
                     set_tests_properties(checkpoint_entry_nested_bti_backend_live_chain PROPERTIES
                         TIMEOUT 10 SKIP_RETURN_CODE 77)
                 endif()
+            endif()
+            if(TEAPOT_AARCH64_TAG_STORAGE STREQUAL "mte")
+                add_test(NAME checkpoint_entry_${mode}_memlog-mte
+                    COMMAND ${entry_test} memlog-mte)
+                set_tests_properties(checkpoint_entry_${mode}_memlog-mte PROPERTIES TIMEOUT 10)
             endif()
             add_test(NAME checkpoint_entry_${mode}_report
                 COMMAND ${entry_test} report)

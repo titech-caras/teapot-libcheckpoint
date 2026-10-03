@@ -199,6 +199,31 @@ static void check_memlog(void) {
     assert(munmap(page, page_size) == 0);
 }
 
+/* A rollback validates the whole log before it writes anything: an older
+ * corrupt entry beneath a newer valid one stops it with the target untouched.
+ * The rollback runs in a child; the target is shared memory the parent reads. */
+static void check_memlog_validation(void) {
+    uint64_t *target = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    assert(target != MAP_FAILED);
+    target[0] = UINT64_C(0x5555555555555555);
+    pid_t child = fork();
+    assert(child >= 0);
+    if (child == 0) {
+        checkpoint_cnt = 0;
+        checkpoint_metadata[0].memory_history_top = memory_history;
+        memory_history[0] = (memory_history_t){.addr = target + 1, .data = 0, .size = 0};  /* corrupt */
+        memory_history[1] = (memory_history_t){.addr = target, .data = UINT64_MAX, .size = 8};
+        memory_history_top = memory_history + 2;
+        restore_checkpoint_memlog();
+        _exit(0);  /* must not be reached */
+    }
+    int status;
+    assert(waitpid(child, &status, 0) == child);
+    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+    assert(target[0] == UINT64_C(0x5555555555555555));
+    assert(munmap(target, 4096) == 0);
+}
+
 /* Verify exact calls without adding ASan's startup requirements to the
  * assembly-entry tests. Full-pipeline smokes link the actual ASan runtime. */
 void __asan_poison_memory_region(void const volatile *address, size_t size) {
@@ -210,6 +235,87 @@ void __asan_poison_memory_region(void const volatile *address, size_t size) {
     assert((uintptr_t)&poisoned_ranges < start || (uintptr_t)&poisoned_ranges >= end);
     poisoned_ranges++;
 }
+
+/* Replay runs from the newest entry to the oldest, so the oldest entry for a
+ * byte wins, and it stops at the rolled-back checkpoint's lower bound. */
+static void check_memlog_order(void) {
+    static uint64_t word;
+    unsigned char *bytes = (unsigned char *)&word;
+    word = UINT64_C(0x5555555555555555);
+    checkpoint_cnt = 0;
+    checkpoint_metadata[0].memory_history_top = memory_history;
+    memory_history[0] = (memory_history_t){.addr = bytes + 2, .data = UINT64_C(0x2222), .size = 2};
+    memory_history[1] = (memory_history_t){.addr = bytes, .data = UINT64_C(0x1111111111111111), .size = 8};
+    memory_history[2] = (memory_history_t){.addr = bytes + 4, .data = UINT64_C(0x33333333), .size = 4};
+    memory_history_top = memory_history + 3;
+    restore_checkpoint_memlog();
+    static const unsigned char expected[8] = {0x11, 0x11, 0x22, 0x22, 0x11, 0x11, 0x11, 0x11};
+    assert(memcmp(bytes, expected, sizeof(expected)) == 0);
+    assert(memory_history_top == memory_history);
+    for (int i = 0; i < 3; i++) assert(memory_history[i].size == 0);
+
+    /* A nested rollback replays only the inner checkpoint's entries. */
+    unsigned depth = MAX_CHECKPOINTS > 1 ? 1 : 0;
+    word = UINT64_C(0x5555555555555555);
+    checkpoint_cnt = depth;
+    checkpoint_metadata[depth].memory_history_top = memory_history + 1;
+    memory_history[0] = (memory_history_t){.addr = bytes, .data = 0, .size = 8};
+    memory_history[1] = (memory_history_t){.addr = bytes + 4, .data = UINT64_C(0x44444444), .size = 4};
+    memory_history_top = memory_history + 2;
+    restore_checkpoint_memlog();
+    assert(word == UINT64_C(0x4444444455555555));
+    assert(memory_history_top == memory_history + 1);
+    assert(memory_history[0].size == 8 && memory_history[1].size == 0);
+    memory_history_top = memory_history;
+    checkpoint_cnt = 0;
+}
+
+#if defined(__aarch64__) && defined(TEAPOT_AARCH64_MTE_TAG_STORAGE)
+#ifndef PROT_MTE
+#define PROT_MTE 0x20
+#endif
+static unsigned mte_tag_of(const void *granule) {
+    uintptr_t tagged = (uintptr_t)granule;
+    asm volatile("ldg %0, [%1]" : "+r"(tagged) : "r"(granule) : "memory");
+    return (unsigned)(tagged >> 56) & 0xf;
+}
+
+static void mte_set_tag(void *granule, unsigned tag) {
+    uintptr_t tagged = (uintptr_t)granule | ((uintptr_t)tag << 56);
+    asm volatile("stg %0, [%1]" :: "r"(tagged), "r"(granule) : "memory");
+}
+
+/* A tag entry restores its granule's allocation tag, in log order with the
+ * data entries around it: a granule logged twice ends with its oldest tag. */
+static void check_memlog_mte(void) {
+    size_t page_size = (size_t)sysconf(_SC_PAGESIZE);
+    unsigned char *page = mmap(NULL, page_size, PROT_READ | PROT_WRITE | PROT_MTE,
+                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    assert(page != MAP_FAILED);
+    uint64_t *data = (uint64_t *)(page + 16);
+    mte_set_tag(page, 0x3);
+    mte_set_tag(page + 16, 0x5);
+    *data = UINT64_C(0x5555555555555555);
+    checkpoint_cnt = 0;
+    checkpoint_metadata[0].memory_history_top = memory_history;
+    memory_history[0] = (memory_history_t){.addr = page, .data = 0x3, .size = MEM_HISTORY_MTE_TAG_SIZE};
+    mte_set_tag(page, 0x9);
+    memory_history[1] = (memory_history_t){.addr = data, .data = *data, .size = 8};
+    *data = UINT64_MAX;
+    memory_history[2] = (memory_history_t){.addr = page + 16, .data = 0x5, .size = MEM_HISTORY_MTE_TAG_SIZE};
+    mte_set_tag(page + 16, 0xa);
+    memory_history[3] = (memory_history_t){.addr = page, .data = 0x9, .size = MEM_HISTORY_MTE_TAG_SIZE};
+    mte_set_tag(page, 0xc);
+    memory_history_top = memory_history + 4;
+    restore_checkpoint_memlog();
+    assert(mte_tag_of(page) == 0x3);
+    assert(mte_tag_of(page + 16) == 0x5);
+    assert(*data == UINT64_C(0x5555555555555555));
+    assert(memory_history_top == memory_history);
+    for (int i = 0; i < 4; i++) assert(memory_history[i].size == 0);
+    assert(munmap(page, page_size) == 0);
+}
+#endif
 
 static void check_storage(void) {
     assert(memory_history_top == memory_history && guard_list_top == guard_list);
@@ -390,6 +496,14 @@ int main(int argc, char **argv) {
         check_storage();
     else if (strcmp(argv[1], "memlog") == 0)
         check_memlog();
+    else if (strcmp(argv[1], "memlog-validation") == 0)
+        check_memlog_validation();
+    else if (strcmp(argv[1], "memlog-order") == 0)
+        check_memlog_order();
+#if defined(__aarch64__) && defined(TEAPOT_AARCH64_MTE_TAG_STORAGE)
+    else if (strcmp(argv[1], "memlog-mte") == 0)
+        check_memlog_mte();
+#endif
     else if (strcmp(argv[1], "queued-tags") == 0)
         check_queued_tags();
     else if (strcmp(argv[1], "assertions") == 0)
