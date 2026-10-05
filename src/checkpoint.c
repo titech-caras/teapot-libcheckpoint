@@ -117,18 +117,16 @@ static inline void mte_store_tag(uintptr_t addr, uint8_t tag);
 #endif
 
 #ifdef COVERAGE
-__attribute__((weak)) void hfuzz_trace_pc(uint64_t pc) {
-    (void)pc;
-}
-
-__attribute__((weak)) void __sanitizer_cov_trace_pc_guard_init(uint32_t *start, uint32_t *stop) {
-    (void)start;
-    (void)stop;
-}
-
-__attribute__((weak)) void __sanitizer_cov_trace_pc_guard(uint32_t *guard) {
-    (void)guard;
-}
+/*
+ * The fuzzer's coverage interface, which libhfuzz provides. A COVERAGE runtime
+ * references these and the checkpoint entry's hfuzz_trace_pc as ordinary
+ * (strong) undefined symbols, with no fallback: a program linked without a
+ * provider fails to link instead of silently discarding the speculative
+ * coverage, and a provider archive listed after this one is extracted for
+ * them. An ordinary runtime references none of them. See README.md.
+ */
+void __sanitizer_cov_trace_pc_guard_init(uint32_t *start, uint32_t *stop);
+void __sanitizer_cov_trace_pc_guard(uint32_t *guard);
 
 extern uint32_t guard_start asm("__guard_start__teapot__");
 extern uint32_t guard_end asm("__guard_end__teapot__");

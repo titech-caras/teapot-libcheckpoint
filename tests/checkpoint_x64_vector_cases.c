@@ -9,7 +9,8 @@ static uint32_t branch_count;
 uint64_t vector_observed[8];
 uint32_t __guard_start__teapot__[1], __guard_end__teapot__[1];
 
-/* Also exercise the normal checkpoint path across an ABI-clobbering hook. */
+/* Also exercise the normal checkpoint path across an ABI-clobbering hook (the
+ * COVERAGE runtime requires it; tests/coverage_provider.c supplies the others). */
 void hfuzz_trace_pc(uint64_t pc) {
     (void)pc;
     __asm__ volatile("pxor %%xmm0, %%xmm0; pxor %%xmm15, %%xmm15" ::: "xmm0", "xmm15");

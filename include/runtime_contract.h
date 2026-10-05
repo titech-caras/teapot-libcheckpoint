@@ -32,6 +32,14 @@
  * the AArch64 shadow stack and runtime-internal report regions that only need
  * to stay apart: moving one is a contract change.
  *
+ * The coverage mode is an ABI fact as well as a capability. A runtime built
+ * with COVERAGE (TEAPOT_ENABLE_COVERAGE, for a fuzzer) replays the speculative
+ * coverage guards at each rollback, and Teapot emits the guard pushes for such
+ * a runtime only. Its "coverage" key makes the fingerprint, and so the anchor,
+ * differ between the two builds: a module rewritten for either mode neither
+ * links with nor starts on the other, so a fuzzing build cannot silently lose
+ * its speculative coverage and an ordinary one carries no unused pushes.
+ *
  * Conventions that are not numbers (report-call clobbers, the checkpoint entry
  * and rollback protocols) are covered by the version: change one, and bump
  * LIBCHECKPOINT_CONTRACT_VERSION here and in Teapot.
@@ -53,6 +61,8 @@
  * least the full state (TEAPOT_X64_VECTOR_STATE auto or full, so every site
  * gets what it asks for), SSE or AVX. xmm0-7 is always available. */
 #define LIBCHECKPOINT_CAPABILITY_X64_VECTOR_FULL 0x8
+/* The runtime replays speculative coverage; a module that pushes it requires
+ * this. The ABI key "coverage" binds the mode in both directions. */
 #define LIBCHECKPOINT_CAPABILITY_COVERAGE 0x10
 #define LIBCHECKPOINT_CAPABILITY_RISCV64_FLOAT_STATE 0x20
 #define LIBCHECKPOINT_CAPABILITY_X64_VECTOR_SSE 0x40

@@ -19,7 +19,9 @@ __attribute__((noreturn)) void __wrap_restore_checkpoint(int reason) {
     __real_restore_checkpoint(reason);
 }
 
-/* Read DF before any C library call, then repair the ABI even on a red test. */
+/* The COVERAGE runtime's normal-path hook, which it requires (the entry test
+ * leaves it out of tests/coverage_provider.c on x64). Read DF before any C
+ * library call, then repair the ABI even on a red test. */
 void hfuzz_trace_pc(uint64_t pc) {
     (void)pc;
     uint64_t flags;

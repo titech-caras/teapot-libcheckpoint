@@ -43,14 +43,26 @@ extern int check_aarch64_pac(void *stack_top);
 #endif
 #endif
 
-uint32_t __guard_start__teapot__[1];
-uint32_t __guard_end__teapot__[1];
+/* A rewritten module's coverage guards, as Teapot's guard section defines
+ * them: one 32-bit guard per transient block, between the two symbols. */
+#define COVERAGE_GUARDS 4
+__asm__(".pushsection .data.checkpoint_test_guards,\"aw\"\n"
+        ".balign 4\n"
+        ".globl __guard_start__teapot__, __guard_end__teapot__\n"
+        "__guard_start__teapot__:\n"
+        ".zero 16\n"
+        "__guard_end__teapot__:\n"
+        ".popsection\n");
+extern uint32_t __guard_start__teapot__[COVERAGE_GUARDS];
+_Static_assert(COVERAGE_GUARDS == 4, "the assembly above reserves four guards");
 static uint32_t branch_counter;
 static void *stack_top;
 static unsigned poisoned_ranges;
 static sigjmp_buf memlog_fault_return;
 static void *queue_fault_page;
 static bool queue_force_fault;
+static bool coverage_test;
+static __attribute__((noreturn)) void coverage_transient_body(void);
 
 static void check_assertions(void) {
     int output[2];
@@ -84,6 +96,8 @@ static void check_assertions(void) {
 
 /* The assembly probe tail-enters this only after a real checkpoint. */
 __attribute__((noreturn)) void checkpoint_test_transient_body(void) {
+    if (coverage_test)
+        coverage_transient_body();
     memset(dift_reg_queued_tags, TAG_SECRET_INDIRECT, DIFT_REG_TAGS_SIZE);
     dift_reg_queue_pending[0] = 1;
     memset(dift_reg_tags, TAG_SECRET, DIFT_REG_TAGS_SIZE);
@@ -128,6 +142,114 @@ static void check_queued_tags(void) {
         }
     }
     checkpoint_cnt = 0;
+    assert(munmap(queue_fault_page, page_size) == 0);
+}
+
+/*
+ * Speculative coverage, as the fuzzer receives it (these programs define
+ * COVERAGE). A rollback replays the guards its window pushed into the Sanitizer
+ * Coverage callback, newest first, once the memory log is undone; guards pushed
+ * before the window's checkpoint stay for the enclosing window. A guard the
+ * fuzzer has zeroed, and an index outside the guard section, are skipped. With
+ * nesting the chain is real: the outer window's body makes the inner checkpoint.
+ */
+static unsigned coverage_events[8], coverage_event_count, coverage_step;
+static uint64_t coverage_word, coverage_word_expected;
+static bool coverage_nested;
+
+/* The fuzzer's callback, which the COVERAGE runtime requires: this test's
+ * recording provider (tests/coverage_provider.c supplies the other two). */
+void __sanitizer_cov_trace_pc_guard(uint32_t *guard) {
+    assert(guard >= __guard_start__teapot__ && guard < __guard_start__teapot__ + COVERAGE_GUARDS);
+    assert(*guard != 0);
+    /* Speculation may have written the fuzzer's own memory: the replay must
+     * see it restored. */
+    assert(!in_restore_memlog && coverage_word == coverage_word_expected);
+    assert(coverage_event_count < sizeof(coverage_events) / sizeof(coverage_events[0]));
+    coverage_events[coverage_event_count++] = (unsigned)(guard - __guard_start__teapot__);
+}
+
+/* What Teapot's coverage push does at a transient block. */
+static void coverage_push(uint32_t index) {
+    *guard_list_top++ = index;
+}
+
+static void coverage_logged_write(uint64_t value) {
+    *memory_history_top++ = (memory_history_t){.addr = &coverage_word, .data = coverage_word, .size = 8};
+    coverage_word = value;
+}
+
+static __attribute__((noreturn)) void coverage_transient_body(void) {
+    if (coverage_step++ == 0) {
+        /* The outer window, or the only one. */
+        coverage_logged_write(0x1111);
+        coverage_push(0);
+        coverage_push(3);
+        coverage_push(COVERAGE_GUARDS);
+        if (coverage_nested) {
+            uint64_t depth = checkpoint_cnt;
+            /* AArch64 probes take a stack; leave this body's frame alone. */
+            void *inner_stack = stack_top ? (char *)stack_top - 65536 : NULL;
+            coverage_word_expected = 0x1111;
+            assert(checkpoint_rollback_probe(inner_stack) == 1);
+            /* The inner rollback replayed only its own guard. */
+            assert(checkpoint_cnt == depth && coverage_word == 0x1111);
+            assert(coverage_event_count == 1 && coverage_events[0] == 2);
+            assert(guard_list_top == guard_list + 3);
+            coverage_push(1);
+        }
+        if (queue_force_fault) {
+            /* The newest entry faults in the replay, which then restarts. */
+            *memory_history_top++ = (memory_history_t){
+                .addr = queue_fault_page, .data = UINT64_MAX, .size = 8};
+        }
+        coverage_word_expected = 0x5555;
+        restore_checkpoint_ROB_LEN();
+    }
+    /* The inner window. */
+    coverage_logged_write(0x2222);
+    coverage_push(2);
+    restore_checkpoint_ROB_LEN();
+}
+
+static void check_coverage(void) {
+    size_t page_size = (size_t)sysconf(_SC_PAGESIZE);
+    queue_fault_page = mmap(NULL, page_size, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    assert(queue_fault_page != MAP_FAILED);
+    setup_signal_handler();
+    coverage_test = true;
+    for (unsigned nested = 0; nested <= (MAX_CHECKPOINTS > 1); ++nested) {
+        for (unsigned fault = 0; fault < 2; ++fault) {
+            /* As the fuzzer leaves them: guard 3 has been retired. */
+            for (unsigned i = 0; i < COVERAGE_GUARDS; ++i)
+                __guard_start__teapot__[i] = i == 3 ? 0 : i + 1;
+            coverage_nested = nested;
+            queue_force_fault = fault;
+            coverage_step = coverage_event_count = 0;
+            coverage_word = 0x5555;
+            checkpoint_cnt = 0;
+            max_checkpoints = MAX_CHECKPOINTS;
+            branch_counter = 0;
+            memory_history_top = memory_history;
+            guard_list_top = guard_list;
+            assert(checkpoint_rollback_probe(stack_top) == 1);
+            assert(checkpoint_cnt == 0 && coverage_word == 0x5555 && !in_restore_memlog);
+            assert(memory_history_top == memory_history && guard_list_top == guard_list);
+            /* Every pushed guard reached the fuzzer once, the inner window's
+             * at the inner rollback, the rest newest first at the outer one. */
+            static const unsigned flat[] = {0}, chain[] = {2, 1, 0};
+            const unsigned *expected = nested ? chain : flat;
+            unsigned count = nested ? 3 : 1;
+            if (coverage_event_count != count) {
+                fprintf(stderr, "nested=%u fault=%u: %u coverage events, expected %u\n",
+                        nested, fault, coverage_event_count, count);
+                abort();
+            }
+            for (unsigned i = 0; i < count; ++i)
+                assert(coverage_events[i] == expected[i]);
+        }
+    }
+    coverage_test = queue_force_fault = false;
     assert(munmap(queue_fault_page, page_size) == 0);
 }
 
@@ -506,6 +628,8 @@ int main(int argc, char **argv) {
 #endif
     else if (strcmp(argv[1], "queued-tags") == 0)
         check_queued_tags();
+    else if (strcmp(argv[1], "coverage") == 0)
+        check_coverage();
     else if (strcmp(argv[1], "assertions") == 0)
         check_assertions();
 #if defined(__x86_64__)

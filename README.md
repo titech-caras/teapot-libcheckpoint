@@ -51,9 +51,9 @@ installs them beside the archives. Each holds:
   such as scratchpad, memory-history and checkpoint-metadata offsets, the DIFT
   layout with the application ranges its shadow covers, tag sizes, values and
   register indices, tag storage, report frames and the AArch64 shadow-stack
-  slots. A probe compiled with the target compiler reads them from the headers,
-  `sizeof` and `offsetof` (it is never run, so cross builds work). The
-  `fingerprint` hashes this section.
+  slots, and the coverage mode (`coverage`, below). A probe compiled with the
+  target compiler reads them from the headers, `sizeof` and `offsetof` (it is
+  never run, so cross builds work). The `fingerprint` hashes this section.
 - `capabilities`: what the archive provides (nested speculation, BTI+PAC, DIFT
   shadow set-up, how much x64 vector state it saves at least: full, AVX or SSE,
   coverage, RISC-V FP state). Teapot requires the RISC-V FP state for every
@@ -160,8 +160,27 @@ whole 8-byte granules and preserve stronger type alignment, such as XSAVE's
 bounds rather than extending poison into neighboring data.
 Keep direct runtime accesses in libcheckpoint code; do not use intercepted libc
 memory routines such as `memcpy` on protected metadata.
-For coverage builds, link a library that provides the Sanitizer Coverage
-interface, such as `libhfuzz`.
+A coverage build requires the fuzzer at link time. It refers to honggfuzz's
+`hfuzz_trace_pc` (called at each outermost checkpoint) and to the Sanitizer
+Coverage callbacks `__sanitizer_cov_trace_pc_guard_init` and
+`__sanitizer_cov_trace_pc_guard` as ordinary undefined symbols and defines no
+fallback, so a program linked without a provider fails to link rather than
+silently losing its coverage; an ordinary build refers to none of them. Link
+`libhfuzz.a` (then `libhfcommon.a`) after this archive: one libhfuzz module
+defines all three, and GNU ld extracts it for these references only from an
+archive listed later (`ld.lld` from either order; `hfuzz-cc` also forces it in
+with `-Wl,-u,LIBHFUZZ_module_instrument`). ASan's shared runtime defines weak
+Sanitizer Coverage callbacks of its own, which libhfuzz's replace, but not
+`hfuzz_trace_pc`. The tests link `tests/coverage_provider.c`, which records the
+calls, in place of libhfuzz. The coverage mode is part of the contract: with
+`-DTEAPOT_ENABLE_COVERAGE=ON` (the default with `hfuzz-clang` or `hfuzz-gcc`)
+the ABI key `coverage` is 1 and every rollback replays the speculative coverage
+guards into `__sanitizer_cov_trace_pc_guard`. Teapot reads the mode from the
+contract when it rewrites: it emits the guard pushes for such a runtime and
+none for an ordinary one, which would only discard them. The two builds have
+different fingerprints, so a module rewritten for one mode does not link with,
+or start on, an archive of the other. Nothing at run time, such as an
+environment variable, changes the mode.
 
 AArch64 can optionally store Teapot ASan-style tags in MTE allocation tags:
 

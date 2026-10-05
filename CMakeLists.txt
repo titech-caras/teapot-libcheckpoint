@@ -45,6 +45,9 @@ if(BUILD_TESTING)
         cmake_parse_arguments(CONTRACT "NO_RECORD;ACCEPTED" "" "DEFINITIONS;SOURCES" ${ARGN})
         set(target checkpoint_contract_${name}_test)
         set(sources tests/contract_check.c ${CHECKPOINT_RUNTIME_SOURCES})
+        if(TEAPOT_ENABLE_COVERAGE)
+            list(APPEND sources tests/coverage_provider.c)
+        endif()
         if(NOT CONTRACT_NO_RECORD)
             list(APPEND sources tests/contract_module_record.c)
         endif()
@@ -94,6 +97,25 @@ if(BUILD_TESTING)
         DEFINITIONS TEST_CONTRACT_JSON_SIZE=1 TEST_CONTRACT_JSON_BYTES=1)
     teapot_add_contract_test(mixed_alignment "(truncated|malformed) module contract record" NO_RECORD
         SOURCES tests/contract_mixed_alignment.c)
+    # Each manifest states the coverage mode the build was configured with, in
+    # the fingerprinted ABI and as the capability.
+    foreach(archive IN ITEMS checkpoint checkpoint_nested)
+        if(TARGET ${archive})
+            add_test(NAME ${archive}_contract_coverage_mode
+                COMMAND "${CMAKE_COMMAND}" "-DMANIFEST=${CMAKE_CURRENT_BINARY_DIR}/lib${archive}.contract.json"
+                    "-DENABLED=${TEAPOT_ENABLE_COVERAGE}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/contract_coverage_mode.cmake")
+            # A coverage archive leaves its callbacks undefined, with no weak
+            # fallback, so that a link without a provider fails; an ordinary
+            # archive does not refer to them.
+            if(CMAKE_NM)
+                add_test(NAME ${archive}_coverage_references
+                    COMMAND "${CMAKE_COMMAND}" "-DNM=${CMAKE_NM}" "-DLIBRARY=$<TARGET_FILE:${archive}>"
+                        "-DENABLED=${TEAPOT_ENABLE_COVERAGE}"
+                        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_coverage_references.cmake")
+            endif()
+        endif()
+    endforeach()
 
     add_executable(checkpoint_dift_mapping_test tests/dift_mapping.c)
     teapot_configure_checkpoint_target(checkpoint_dift_mapping_test)
@@ -114,10 +136,10 @@ if(BUILD_TESTING)
         # full-depth burst. In particular it must handle counter wrap to zero.
         add_executable(checkpoint_entry_priority_test
             tests/checkpoint_entry.c tests/checkpoint_entry.S tests/contract_module_record.c
-            ${CHECKPOINT_RUNTIME_SOURCES})
+            tests/coverage_provider.c ${CHECKPOINT_RUNTIME_SOURCES})
         teapot_configure_checkpoint_target(checkpoint_entry_priority_test)
         target_compile_definitions(checkpoint_entry_priority_test PRIVATE
-            SPECFUZZ_PRIORITIZED_SIMULATION TIME)
+            SPECFUZZ_PRIORITIZED_SIMULATION TIME COVERAGE_PROVIDER_WITHOUT_GUARD)
         target_compile_options(checkpoint_entry_priority_test PRIVATE -fno-pie)
         target_link_options(checkpoint_entry_priority_test PRIVATE -no-pie -Wl,--no-relax)
         add_test(NAME checkpoint_entry_priority_capacity
@@ -154,6 +176,9 @@ if(BUILD_TESTING)
         add_executable(checkpoint_mte_setup_test tests/mte_setup.c asm/storage.S
             "${LIBCHECKPOINT_CONTRACT_RECORD_SOURCE}" tests/contract_module_record.c)
         teapot_configure_checkpoint_target(checkpoint_mte_setup_test)
+        if(TEAPOT_ENABLE_COVERAGE)
+            target_sources(checkpoint_mte_setup_test PRIVATE tests/coverage_provider.c)
+        endif()
         target_compile_options(checkpoint_mte_setup_test PRIVATE -ffunction-sections -fdata-sections)
         target_link_options(checkpoint_mte_setup_test PRIVATE -Wl,--gc-sections)
         foreach(check IN ITEMS mappings protected)
@@ -264,7 +289,11 @@ if(BUILD_TESTING)
             ${entry_runtime_sources})
         teapot_configure_checkpoint_target(${entry_test})
         target_compile_definitions(${entry_test} PRIVATE TIME COVERAGE)
+        # COVERAGE runtimes require their coverage callbacks.
+        target_sources(${entry_test} PRIVATE tests/coverage_provider.c)
+        target_compile_definitions(${entry_test} PRIVATE COVERAGE_PROVIDER_WITHOUT_GUARD)
         if(CHECKPOINT_ARCH_NAME STREQUAL "x64")
+            target_compile_definitions(${entry_test} PRIVATE COVERAGE_PROVIDER_WITHOUT_TRACE_PC)
             target_sources(${entry_test} PRIVATE tests/checkpoint_x64_df.c tests/checkpoint_x64_df.S)
             target_link_options(${entry_test} PRIVATE -Wl,--wrap=restore_checkpoint)
             add_test(NAME checkpoint_entry_${mode}_df COMMAND ${entry_test} df)
@@ -287,7 +316,8 @@ if(BUILD_TESTING)
                 set_tests_properties(checkpoint_entry_${mode}_riscv64_float PROPERTIES WILL_FAIL TRUE)
             endif()
         endif()
-        foreach(check IN ITEMS capacity timing storage memlog memlog-validation memlog-order queued-tags assertions)
+        foreach(check IN ITEMS capacity timing storage memlog memlog-validation memlog-order queued-tags coverage
+                               assertions)
             add_test(NAME checkpoint_entry_${mode}_${check}
                 COMMAND ${entry_test} ${check})
             set_tests_properties(checkpoint_entry_${mode}_${check}
@@ -353,9 +383,10 @@ if(BUILD_TESTING AND CHECKPOINT_ARCH_NAME STREQUAL "x64")
     add_executable(checkpoint_x64_simd_normal_path_test
         tests/checkpoint_x64_simd_normal_path.c
         tests/checkpoint_x64_simd_normal_path.S tests/contract_module_record.c
-        ${CHECKPOINT_RUNTIME_SOURCES})
+        tests/coverage_provider.c ${CHECKPOINT_RUNTIME_SOURCES})
     teapot_configure_checkpoint_target(checkpoint_x64_simd_normal_path_test)
-    target_compile_definitions(checkpoint_x64_simd_normal_path_test PRIVATE COVERAGE)
+    target_compile_definitions(checkpoint_x64_simd_normal_path_test PRIVATE COVERAGE
+        COVERAGE_PROVIDER_WITHOUT_TRACE_PC)
     target_compile_options(checkpoint_x64_simd_normal_path_test PRIVATE -fno-pie)
     target_link_options(checkpoint_x64_simd_normal_path_test PRIVATE -no-pie)
     add_test(
@@ -364,9 +395,10 @@ if(BUILD_TESTING AND CHECKPOINT_ARCH_NAME STREQUAL "x64")
 
     add_executable(checkpoint_x64_vector_cases_test
         tests/checkpoint_x64_vector_cases.c tests/checkpoint_x64_vector_cases.S
-        tests/contract_module_record.c ${CHECKPOINT_RUNTIME_SOURCES})
+        tests/contract_module_record.c tests/coverage_provider.c ${CHECKPOINT_RUNTIME_SOURCES})
     teapot_configure_checkpoint_target(checkpoint_x64_vector_cases_test)
-    target_compile_definitions(checkpoint_x64_vector_cases_test PRIVATE COVERAGE ENABLE_NESTED_SPECULATION)
+    target_compile_definitions(checkpoint_x64_vector_cases_test PRIVATE COVERAGE ENABLE_NESTED_SPECULATION
+        COVERAGE_PROVIDER_WITHOUT_TRACE_PC)
     target_compile_options(checkpoint_x64_vector_cases_test PRIVATE -fno-pie)
     target_link_options(checkpoint_x64_vector_cases_test PRIVATE -no-pie)
     add_test(NAME checkpoint_x64_vector_cases COMMAND checkpoint_x64_vector_cases_test)
@@ -379,6 +411,11 @@ if(BUILD_TESTING AND CHECKPOINT_ARCH_NAME STREQUAL "x64" AND TEAPOT_TEST_ASAN_AV
         tests/checkpoint_x64_xsave_report.S tests/contract_module_record.c)
     teapot_configure_checkpoint_target(checkpoint_x64_xsave_report_test)
     target_link_libraries(checkpoint_x64_xsave_report_test PRIVATE checkpoint)
+    if(TEAPOT_ENABLE_COVERAGE)
+        # Compiled in, so that it binds before ASan's own weak Sanitizer
+        # Coverage callbacks.
+        target_sources(checkpoint_x64_xsave_report_test PRIVATE tests/coverage_provider.c)
+    endif()
     target_compile_options(checkpoint_x64_xsave_report_test PRIVATE -fno-pie)
     target_link_options(checkpoint_x64_xsave_report_test PRIVATE -no-pie -fsanitize=address)
     target_link_options(checkpoint_x64_xsave_report_test PRIVATE

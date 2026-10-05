@@ -14,7 +14,8 @@ extern int checkpoint_x64_simd_normal_path_probe(void);
 uint32_t __guard_start__teapot__[1];
 uint32_t __guard_end__teapot__[1];
 
-/* Override libcheckpoint's weak coverage hook with a deliberate XMM clobber. */
+/* The COVERAGE runtime's normal-path hook, which it requires, with a deliberate
+ * XMM clobber (tests/coverage_provider.c supplies the other callbacks). */
 __attribute__((noinline)) void hfuzz_trace_pc(uint64_t pc) {
     (void)pc;
     __asm__ volatile("pxor %%xmm0, %%xmm0; pxor %%xmm15, %%xmm15" ::: "xmm0", "xmm15");

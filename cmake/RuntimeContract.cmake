@@ -42,6 +42,11 @@ set(_contract_abi
     "counters.instruction_cnt_width|sizeof(instruction_cnt)"
     "counters.checkpoint_cnt_width|sizeof(checkpoint_cnt)"
     "guards.list_entry_width|sizeof(guard_list[0])"
+    # Whether a rollback replays the speculative coverage guards into a fuzzer
+    # (COVERAGE, from TEAPOT_ENABLE_COVERAGE). Teapot emits the guard pushes for
+    # exactly such a runtime, so the mode belongs to the fingerprint: an archive
+    # built the other way has another anchor and refuses the module.
+    "coverage|LCK_COVERAGE"
     "dift.xor_mask|DIFT_XOR_MASK"
     "dift.asan_shadow_offset|LCK_DIFT_ASAN_SHADOW_OFFSET"
     "dift.reg_tags_size|DIFT_REG_TAGS_SIZE"
@@ -168,6 +173,11 @@ function(_libcheckpoint_contract_probe_source out)
 #define LCK_BRANCH_EXEC_COUNT 1
 #else
 #define LCK_BRANCH_EXEC_COUNT 0
+#endif
+#ifdef COVERAGE
+#define LCK_COVERAGE 1
+#else
+#define LCK_COVERAGE 0
 #endif
 ")
     set(count 0)
