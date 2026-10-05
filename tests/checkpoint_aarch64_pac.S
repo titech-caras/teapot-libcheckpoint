@@ -63,7 +63,7 @@ teapot_pac_bad_auth:
 	movk x0, #0x4567, lsl #16
 	movk x0, #0x1234, lsl #32
 	.inst 0xdac103e0			/* pacia x0, sp */
-	movk x0, #0x4000, lsl #48		/* corrupt one PAC bit */
+	eor x0, x0, #0x0040000000000000	/* flip PAC bit 54 (see fpac_probe_child) */
 	.inst 0xdac113e0			/* autia x0, sp */
 	ret
 	.size teapot_pac_bad_auth, .-teapot_pac_bad_auth

@@ -119,11 +119,15 @@ static void fpac_probe_signal(int sig, siginfo_t *info, void *context) {
 
 /* Child body for the FEAT_FPAC probe: deliberately corrupt one PAC bit of a
  * signed value and authenticate it. FPAC traps; without FPAC the authentication
- * returns a poisoned pointer. */
+ * returns a poisoned pointer. Bit 54 is a PAC bit at every supported
+ * virtual-address size (up to 52 bits). Bit 62 was used before, but where TBI
+ * covers instruction addresses, as in QEMU user mode, it is a tag bit: flipping
+ * it only changes the signed input, the 7-bit PAC still matched in about 1 of
+ * 128 runs, and FPAC was reported absent. */
 static int fpac_probe_child(void) {
     const uint64_t canary = UINT64_C(0x00007f123456789a);
     uint64_t signed_value = pacia_x0_sp(canary);
-    uint64_t corrupted = signed_value ^ (UINT64_C(1) << 62);
+    uint64_t corrupted = signed_value ^ (UINT64_C(1) << 54);
     volatile uint64_t result = autia_x0_sp(corrupted);
     return result == canary ? 3 : 1;
 }
