@@ -1,4 +1,5 @@
 #include "checkpoint.h"
+#include "fault_sites.h"
 #include "runtime_contract.h"
 #include "signal_handler.h"
 #include "dift_support.h"
@@ -404,7 +405,7 @@ extern const char __stop_teapot_contract[] __attribute__((weak));
 
 static const char *const contract_capability_names[] = {
     "nested", "aarch64_bti_pac", "dift_runtime", "x64_vector_full", "coverage",
-    "riscv64_float_state", "x64_vector_sse", "x64_vector_avx",
+    "riscv64_float_state", "x64_vector_sse", "x64_vector_avx", "fault_training", "fault_publishing",
 };
 _Static_assert((1u << (sizeof(contract_capability_names) / sizeof(*contract_capability_names))) - 1 ==
                LIBCHECKPOINT_CAPABILITIES_KNOWN, "name every contract capability");
@@ -423,9 +424,10 @@ static void reject_contract(const char *problem, uint64_t found, uint64_t expect
  * archive provides (runtime_contract.h). A program without any module record
  * is refused too, since nothing then shows that its code matches. This runs
  * from .preinit_array, before every .init_array constructor (runtime_contract.h
- * says what can run earlier), and maps nothing.
+ * says what can run earlier). Fault-table validation may allocate a read-only
+ * module registry; DIFT mappings are initialized only after this check.
  */
-void libcheckpoint_check_runtime_contract(void) {
+static void check_runtime_contract_with_environment(char *const *environment) {
     const struct libcheckpoint_contract_record *runtime = &libcheckpoint_runtime_contract;
     const char *cursor = __start_teapot_contract, *end = __stop_teapot_contract;
     size_t modules = 0;
@@ -480,10 +482,17 @@ void libcheckpoint_check_runtime_contract(void) {
     }
     if (modules == 0)
         reject_contract("no module contract record in the record section", 0, runtime->fingerprint);
+    /* Only a successful complete contract walk can authorize table pointers. */
+    teapot_fault_registry_initialize_environment(__start_teapot_contract, __stop_teapot_contract,environment);
 }
 
-static void initialize_instrumentation_state_early() {
-    libcheckpoint_check_runtime_contract();
+void libcheckpoint_check_runtime_contract(void) {
+    extern char **environ;
+    check_runtime_contract_with_environment(environ);
+}
+
+static void initialize_instrumentation_state_with_environment(char *const *environment) {
+    check_runtime_contract_with_environment(environment);
     initialize_first_spill_state();
     initialize_shadow_stack_state();
 #ifndef DISABLE_DIFT_RUNTIME
@@ -491,11 +500,21 @@ static void initialize_instrumentation_state_early() {
 #endif
 }
 
-typedef void (*preinit_function_t)(void);
+static void initialize_instrumentation_state_early(void) {
+    extern char **environ;
+    initialize_instrumentation_state_with_environment(environ);
+}
+
+static void instrumentation_preinit(int argc,char **argv,char **environment) {
+    (void)argc;(void)argv;
+    initialize_instrumentation_state_with_environment(environment);
+}
+
+typedef void (*preinit_function_t)(int,char **,char **);
 
 __attribute__((used, section(".preinit_array")))
 static preinit_function_t const instrumentation_state_preinit =
-    initialize_instrumentation_state_early;
+    instrumentation_preinit;
 
 #ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
 void libcheckpoint_prepare_aarch64_bti_components(void) {
@@ -713,6 +732,9 @@ LIBCHECKPOINT_RESTORE_PATH __attribute__((noreturn)) void restore_checkpoint_aft
     }
     dift_reg_queue_pending[0] = 0;
 
+#ifdef ENABLE_FAULT_PUBLISHING
+    teapot_fault_publish_pending();
+#endif
     restore_checkpoint_registers();
 }
 

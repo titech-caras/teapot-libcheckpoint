@@ -8,6 +8,15 @@ list(APPEND TEAPOT_ARCH_RUNTIME_DEFS TEAPOT_X64_VECTOR_MODE=${_vector_mode})
 if(TEAPOT_ENABLE_COVERAGE)
     list(APPEND TEAPOT_ARCH_RUNTIME_DEFS COVERAGE)
 endif()
+if(TEAPOT_ENABLE_FAULT_TRAINING)
+    list(APPEND TEAPOT_ARCH_RUNTIME_DEFS ENABLE_FAULT_TRAINING)
+endif()
+if(TEAPOT_ENABLE_FAULT_PUBLISHING)
+    if(NOT CHECKPOINT_ARCH_NAME STREQUAL "x64" OR NOT TEAPOT_ENABLE_FAULT_TRAINING)
+        message(FATAL_ERROR "Fault publishing requires x64 and TEAPOT_ENABLE_FAULT_TRAINING=ON")
+    endif()
+    list(APPEND TEAPOT_ARCH_RUNTIME_DEFS ENABLE_FAULT_PUBLISHING)
+endif()
 if(TEAPOT_EXPERIMENTAL_AARCH64_BTI)
     if(NOT CHECKPOINT_ARCH_NAME STREQUAL "aarch64")
         message(FATAL_ERROR "The BTI experiment requires AArch64")
@@ -34,6 +43,8 @@ set(CHECKPOINT_RUNTIME_SOURCES
     asm/storage.S
     ${CHECKPOINT_ASM_SOURCE}
     src/signal_handler.c
+    src/fault_sites.c
+    src/fault_x64.c
     src/dift_support.c
     src/dift_wrappers/dift_wrappers.c
     src/report_gadget.c)
@@ -42,6 +53,11 @@ if(TEAPOT_EXPERIMENTAL_AARCH64_BTI)
 endif()
 
 function(teapot_configure_checkpoint_target target)
+    if(TEAPOT_ENABLE_FAULT_TRAINING)
+        # AArch64/RV GNU ld may otherwise put readonly metadata in the RX
+        # segment. The runtime deliberately requires R-only table mappings.
+        target_link_options(${target} PUBLIC -Wl,-z,separate-code)
+    endif()
     target_include_directories(${target} PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>"
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"

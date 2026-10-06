@@ -12,6 +12,19 @@
 
 #include "checkpoint.h"
 #include "signal_handler.h"
+#ifdef FAULT_SIGNAL_TEST
+#include "fault_sites.h"
+#include "runtime_contract.h"
+extern const struct teapot_fault_site_table fault_test_table;
+extern void fault_pc_first(uintptr_t);
+extern void fault_copy_first(uintptr_t);
+static bool expect_training;
+static const struct libcheckpoint_contract_record fault_record = {
+    .magic = LIBCHECKPOINT_CONTRACT_MAGIC, .version = LIBCHECKPOINT_CONTRACT_VERSION,
+    .kind = LIBCHECKPOINT_CONTRACT_KIND_MODULE, .header_size = LIBCHECKPOINT_CONTRACT_HEADER_SIZE,
+    .capabilities = LIBCHECKPOINT_CAPABILITY_FAULT_TRAINING, .fault_sites = &fault_test_table
+};
+#endif
 
 #ifdef SIGNAL_TEST_ASAN
 #include <sanitizer/asan_interface.h>
@@ -36,6 +49,9 @@ char *__wrap_strsignal(int sig) {
 }
 
 void restore_checkpoint_SIGSEGV(void) {
+#ifdef FAULT_SIGNAL_TEST
+    if (expect_training) _exit(teapot_fault_counter(0, 0) == 1 ? 0 : 10);
+#endif
     sigset_t mask;
     if (expect_redirect && sigprocmask(SIG_SETMASK, NULL, &mask) == 0 &&
             sigismember(&mask, SIGINT) == 1 && sigismember(&mask, SIGILL) == 0)
@@ -369,6 +385,23 @@ static void check_post_setup_registration(void) {
 
 int main(int argc, char **argv) {
     assert(argc == 2);
+#ifdef FAULT_SIGNAL_TEST
+    if (!strcmp(argv[1], "training")) {
+        assert(setenv("TEAPOT_FAULT_ADAPTATION", "1", 1) == 0);
+        teapot_fault_registry_initialize(&fault_record, &fault_record + 1);
+        for (int copied = 0; copied < 2; ++copied) {
+            pid_t child = fork(); assert(child >= 0);
+            if (!child) {
+                expect_training = true; checkpoint_cnt = 1;
+                setup_signal_handler();
+                (copied ? fault_copy_first : fault_pc_first)(0); _exit(11);
+            }
+            int status; assert(waitpid(child, &status, 0) == child);
+            assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+        }
+        return 0;
+    }
+#endif
 #ifdef SIGNAL_TEST_ASAN
     /* As at startup, the protected state is poisoned before the handlers are
      * installed; ASan's interceptors then reject any access through them. */

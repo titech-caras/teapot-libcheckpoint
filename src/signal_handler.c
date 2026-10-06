@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "signal_handler.h"
 #include "checkpoint.h"
+#include "fault_sites.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -179,6 +180,11 @@ void signal_handler(int sig, siginfo_t *info, void *ucontext) {
         return;
 #endif
     } else if (kernel_fault && checkpoint_cnt != 0) {
+        /* Metadata/training only: fault classification and rollback are
+         * unchanged. PAC/BTI handlers above have first refusal. */
+#ifdef ENABLE_FAULT_TRAINING
+        teapot_fault_train(sig, info, *pc, true, false);
+#endif
         *pc = (uintptr_t)&restore_checkpoint_SIGSEGV;
     } else {
         /* The interrupted code may hold stdio/locale locks. Keep forwarding

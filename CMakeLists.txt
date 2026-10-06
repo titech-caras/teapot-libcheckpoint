@@ -14,6 +14,43 @@ include(cmake/DiftWrappers.cmake)
 
 if(BUILD_TESTING)
     include(CheckCSourceCompiles)
+    add_executable(checkpoint_fault_sites_test tests/fault_sites.c tests/fault_sites.S src/fault_sites.c src/fault_x64.c)
+    teapot_configure_checkpoint_target(checkpoint_fault_sites_test)
+    target_compile_definitions(checkpoint_fault_sites_test PRIVATE ENABLE_FAULT_TRAINING)
+    target_compile_options(checkpoint_fault_sites_test PRIVATE -fno-pie)
+    target_link_options(checkpoint_fault_sites_test PRIVATE -no-pie -Wl,-z,separate-code)
+    foreach(check IN ITEMS helpers registry off malformed nested)
+        add_test(NAME checkpoint_fault_sites_${check} COMMAND checkpoint_fault_sites_test ${check})
+        set_tests_properties(checkpoint_fault_sites_${check} PROPERTIES TIMEOUT 30)
+    endforeach()
+    add_executable(checkpoint_fault_startup_test tests/fault_sites.c tests/fault_sites.S src/fault_sites.c src/fault_x64.c)
+    teapot_configure_checkpoint_target(checkpoint_fault_startup_test)
+    target_compile_definitions(checkpoint_fault_startup_test PRIVATE ENABLE_FAULT_TRAINING TEST_FAULT_STARTUP)
+    target_compile_options(checkpoint_fault_startup_test PRIVATE -fno-pie)
+    target_link_options(checkpoint_fault_startup_test PRIVATE -no-pie -Wl,-z,separate-code)
+    foreach(symbol IN ITEMS malloc calloc realloc free fopen fdopen getline qsort mmap)
+        target_link_options(checkpoint_fault_startup_test PRIVATE "-Wl,--wrap=${symbol}")
+    endforeach()
+    foreach(check IN ITEMS startup-on startup-off)
+        add_test(NAME checkpoint_fault_${check} COMMAND checkpoint_fault_startup_test ${check})
+        set_tests_properties(checkpoint_fault_${check} PROPERTIES TIMEOUT 30)
+    endforeach()
+    add_executable(checkpoint_fault_startup_parser_test tests/fault_startup_parser.c tests/fault_sites.S src/fault_x64.c)
+    teapot_configure_checkpoint_target(checkpoint_fault_startup_parser_test)
+    target_compile_definitions(checkpoint_fault_startup_parser_test PRIVATE ENABLE_FAULT_TRAINING)
+    target_compile_options(checkpoint_fault_startup_parser_test PRIVATE -fno-pie)
+    target_link_options(checkpoint_fault_startup_parser_test PRIVATE -no-pie -Wl,-z,separate-code)
+    add_test(NAME checkpoint_fault_startup-parser COMMAND checkpoint_fault_startup_parser_test)
+    set_tests_properties(checkpoint_fault_startup-parser PROPERTIES TIMEOUT 30)
+    add_test(NAME checkpoint_fault_startup-storage COMMAND checkpoint_fault_startup_parser_test storage)
+    set_tests_properties(checkpoint_fault_startup-storage PROPERTIES TIMEOUT 30)
+    if(NOT CMAKE_READELF)
+        message(FATAL_ERROR "CMAKE_READELF is required for the startup NOBITS regression")
+    endif()
+    add_test(NAME checkpoint_fault_startup-storage-elf
+        COMMAND "${CMAKE_COMMAND}" "-DREADELF=${CMAKE_READELF}"
+            "-DBINARY=$<TARGET_FILE:checkpoint_fault_startup_parser_test>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_fault_startup_storage.cmake")
 
     add_test(NAME checkpoint_dift_layout_range_limit
         COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/dift_layout_range_limit.cmake")
@@ -73,6 +110,19 @@ if(BUILD_TESTING)
         set_tests_properties(checkpoint_contract_${name} PROPERTIES TIMEOUT 60)
     endfunction()
     teapot_add_contract_test(accepted "contract accepted" ACCEPTED)
+    if(TEAPOT_ENABLE_FAULT_TRAINING)
+        teapot_add_contract_test(fault_training "contract accepted" ACCEPTED
+            DEFINITIONS TEST_CONTRACT_FAULT_TABLE TEST_CONTRACT_REQUIRED=LIBCHECKPOINT_CAPABILITY_FAULT_TRAINING
+            SOURCES tests/fault_sites.S)
+        teapot_add_contract_test(fault_missing_table "table/capability disagreement"
+            DEFINITIONS TEST_CONTRACT_REQUIRED=LIBCHECKPOINT_CAPABILITY_FAULT_TRAINING)
+    else()
+        teapot_add_contract_test(fault_training "capabilities this archive lacks: fault_training"
+            DEFINITIONS TEST_CONTRACT_FAULT_TABLE TEST_CONTRACT_REQUIRED=LIBCHECKPOINT_CAPABILITY_FAULT_TRAINING
+            SOURCES tests/fault_sites.S)
+    endif()
+    teapot_add_contract_test(fault_unrequired_table "table/capability disagreement"
+        DEFINITIONS TEST_CONTRACT_FAULT_TABLE SOURCES tests/fault_sites.S)
     teapot_add_contract_test(nested_accepted "contract accepted" ACCEPTED
         DEFINITIONS ENABLE_NESTED_SPECULATION
             TEST_CONTRACT_REQUIRED=LIBCHECKPOINT_CAPABILITY_NESTED)
@@ -173,7 +223,7 @@ if(BUILD_TESTING)
     if(CHECKPOINT_ARCH_NAME STREQUAL "aarch64" AND TEAPOT_AARCH64_TAG_STORAGE STREQUAL "mte")
         # mte_setup.c includes checkpoint.c, whose start-up check needs this
         # archive's runtime record and a module record.
-        add_executable(checkpoint_mte_setup_test tests/mte_setup.c asm/storage.S
+        add_executable(checkpoint_mte_setup_test tests/mte_setup.c asm/storage.S src/fault_sites.c src/fault_x64.c
             "${LIBCHECKPOINT_CONTRACT_RECORD_SOURCE}" tests/contract_module_record.c)
         teapot_configure_checkpoint_target(checkpoint_mte_setup_test)
         if(TEAPOT_ENABLE_COVERAGE)
@@ -229,7 +279,7 @@ if(BUILD_TESTING)
     endif()
 
     add_executable(checkpoint_signal_handler_test
-        tests/signal_handler.c src/signal_handler.c)
+        tests/signal_handler.c src/signal_handler.c src/fault_sites.c src/fault_x64.c)
     teapot_configure_checkpoint_target(checkpoint_signal_handler_test)
     target_link_options(checkpoint_signal_handler_test PRIVATE
         -Wl,--wrap=fprintf -Wl,--wrap=strsignal)
@@ -245,6 +295,15 @@ if(BUILD_TESTING)
         COMMAND checkpoint_signal_handler_test unmanaged)
     add_test(NAME checkpoint_signal_user_faults
         COMMAND checkpoint_signal_handler_test user-faults)
+    add_executable(checkpoint_fault_signal_test
+        tests/signal_handler.c tests/fault_sites.S src/signal_handler.c src/fault_sites.c src/fault_x64.c)
+    teapot_configure_checkpoint_target(checkpoint_fault_signal_test)
+    target_compile_definitions(checkpoint_fault_signal_test PRIVATE ENABLE_FAULT_TRAINING FAULT_SIGNAL_TEST)
+    target_compile_options(checkpoint_fault_signal_test PRIVATE -fno-pie)
+    target_link_options(checkpoint_fault_signal_test PRIVATE -no-pie -Wl,-z,separate-code
+        -Wl,--wrap=fprintf -Wl,--wrap=strsignal)
+    add_test(NAME checkpoint_fault_signal COMMAND checkpoint_fault_signal_test training)
+    set_tests_properties(checkpoint_fault_signal PROPERTIES TIMEOUT 30)
     if(TEAPOT_AARCH64_TAG_STORAGE STREQUAL "shadow" AND TEAPOT_TEST_ASAN_AVAILABLE)
         # The runtime is not ASan-instrumented, but ASan's interceptors check the
         # poisoned protected state passed to them. Build the handler the way that
@@ -252,7 +311,7 @@ if(BUILD_TESTING)
         # AArch64 and RISC-V, and on x64 with the libcall string strategy; clang
         # does so at -O0 (and at -O2 on x64 and RISC-V).
         add_executable(checkpoint_signal_handler_asan_test
-            tests/signal_handler.c src/signal_handler.c)
+            tests/signal_handler.c src/signal_handler.c src/fault_sites.c src/fault_x64.c)
         teapot_configure_checkpoint_target(checkpoint_signal_handler_asan_test)
         target_compile_definitions(checkpoint_signal_handler_asan_test PRIVATE SIGNAL_TEST_ASAN)
         target_compile_options(checkpoint_signal_handler_asan_test PRIVATE -fno-pie)

@@ -51,12 +51,13 @@ installs them beside the archives. Each holds:
   such as scratchpad, memory-history and checkpoint-metadata offsets, the DIFT
   layout with the application ranges its shadow covers, tag sizes, values and
   register indices, tag storage, report frames and the AArch64 shadow-stack
-  slots, and the coverage mode (`coverage`, below). A probe compiled with the
+  slots, the coverage mode (`coverage`, below), and the fault-training mode and
+  site-table schema. A probe compiled with the
   target compiler reads them from the headers, `sizeof` and `offsetof` (it is
   never run, so cross builds work). The `fingerprint` hashes this section.
 - `capabilities`: what the archive provides (nested speculation, BTI+PAC, DIFT
   shadow set-up, how much x64 vector state it saves at least: full, AVX or SSE,
-  coverage, RISC-V FP state). Teapot requires the RISC-V FP state for every
+  coverage, RISC-V FP state, fault training). Teapot requires the RISC-V FP state for every
   RISC-V rewrite with checkpoints: without it a rollback does not restore the
   floating-point registers or FCSR (`-DTEAPOT_ENABLE_RISCV_FLOAT_STATE=ON`).
 - `runtime` and `provenance`: facts of the runtime alone and the build, which
@@ -65,7 +66,7 @@ installs them beside the archives. Each holds:
 Pass the file of the archive you link to Teapot with `--runtime-contract`.
 Teapot refuses an ABI it does not emit, naming each field, and options the
 archive cannot serve. Each rewritten module then carries a record that refers to
-`__libcheckpoint_contract_v1_<fingerprint>`, which only an archive with the same
+`__libcheckpoint_contract_v2_<fingerprint>`, which only an archive with the same
 ABI defines, so a mismatched link fails; a note keeps the record under
 `--gc-sections`. At start-up the runtime refuses a program with no record,
 another fingerprint or a capability this archive lacks. It checks from its
@@ -75,6 +76,39 @@ another fingerprint or a capability this archive lacks. It checks from its
 Conventions that are not numbers, such as report-call clobbers and the
 checkpoint entry protocol, are covered by the contract version: changing one
 means bumping `LIBCHECKPOINT_CONTRACT_VERSION` in the runtime and in Teapot.
+
+### Fault training (infrastructure only)
+
+`-DTEAPOT_ENABLE_FAULT_TRAINING=ON` enables signal-safe counting for explicit
+training-only site tables; the default is OFF. This mode has a different ABI
+anchor, so it cannot silently replace an archive built with training disabled.
+It emits no executable slots or guards and performs no text writes.
+
+Tables are read-only and self-relative. Version 2's 16-byte entries describe
+the patchable access, stub, exact copied-access PC and instruction length (no
+NOP slots). Originals and copies share one counter and pending event. Counters
+and pending events live in
+protected, non-rollback NOBITS storage. The runtime validates all metadata and
+builds a read-only registry before application constructors. Only registered
+SIGSEGV MAPERR/ACCERR data-access PCs in an active checkpoint, outside memory
+replay, train. Copy PCs are indexed separately, sorted and read-only; an exact
+copy fault is still transient. Special MTE/BTI/PAC and user-sent faults are not
+counted. The final ELF validator checks one branch-sized data instruction,
+copy equivalence, non-overlap, reach and alignment. PC/SP/FP-relative and
+segmented accesses are not covered by this format.
+
+`TEAPOT_FAULT_ADAPTATION=0` disables training at start-up (unknown values also
+disable it). A capable build otherwise trains the explicitly registered sites.
+The low-address slice is separately startup-verified and disabled on any
+unknown fact; no guard consumes it in this stage. Later low mappings or
+capability/personality changes are unsupported with adaptation enabled.
+Module metadata must remain loaded for the process lifetime.
+
+Links carrying tables require `-Wl,-z,separate-code`, so readonly tables are
+not mapped executable. Training-enabled CMake targets export this option;
+direct archive users must pass it. Validate each final ELF with Teapot's
+`tools/validate_fault_sites.py`; the component validator performs this check
+automatically.
 
 ### Software-mode layout
 

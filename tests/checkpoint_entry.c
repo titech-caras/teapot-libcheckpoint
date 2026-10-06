@@ -456,10 +456,22 @@ static void check_storage(void) {
     };
     uintptr_t start = (uintptr_t)__start_teapot_protected_bss;
     uintptr_t end = (uintptr_t)__stop_teapot_protected_bss;
-    assert(end - start == sizeof(memory_history) + sizeof(checkpoint_target_metadata) +
+    uintptr_t packed_start = (uintptr_t)memory_history;
+    uintptr_t packed_end = (uintptr_t)&max_checkpoints + sizeof(max_checkpoints);
+    /* The rollback objects are still packed. The protected section also holds
+     * private startup scratch even with training compiled out, and training
+     * adds whole-page immutable pools. Their size/alignment/NOBITS properties
+     * have separate startup-storage and startup-storage-elf tests. Link order
+     * may put that storage before or after this packed interval; neither
+     * section endpoint is necessarily a rollback-object endpoint. */
+    assert(packed_end - packed_start == sizeof(memory_history) + sizeof(checkpoint_target_metadata) +
            sizeof(guard_list) + sizeof(scratchpad) + sizeof(max_checkpoints));
+    assert(start <= packed_start && packed_end <= end);
+    uintptr_t cursor = packed_start;
     for (size_t i = 0; i < sizeof(objects) / sizeof(objects[0]); i++) {
         uintptr_t address = (uintptr_t)objects[i].address;
+        assert(address == cursor);
+        cursor += objects[i].size;
         assert(start <= address && address + objects[i].size <= end);
         assert(address % objects[i].alignment == 0);
         if (!objects[i].zeroed)

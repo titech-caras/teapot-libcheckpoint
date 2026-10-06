@@ -12,6 +12,8 @@ if(CMAKE_C_COMPILER MATCHES "hfuzz")
     set(_coverage_default ON)
 endif()
 option(TEAPOT_ENABLE_COVERAGE "Enable honggfuzz coverage callbacks" ${_coverage_default})
+option(TEAPOT_ENABLE_FAULT_TRAINING "Enable training-only adaptive fault metadata (no text patching)" OFF)
+option(TEAPOT_ENABLE_FAULT_PUBLISHING "Enable validated x64 adaptive fault prechecks (single-threaded only)" OFF)
 set(TEAPOT_X64_VECTOR_STATE "auto" CACHE STRING "Checkpoint vector state: auto, xmm0-7, sse, avx, full")
 set_property(CACHE TEAPOT_X64_VECTOR_STATE PROPERTY STRINGS auto xmm0-7 sse avx full)
 # The index is TEAPOT_X64_VECTOR_MODE: 0 keeps each checkpoint site's choice,

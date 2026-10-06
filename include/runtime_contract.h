@@ -45,12 +45,12 @@
  * LIBCHECKPOINT_CONTRACT_VERSION here and in Teapot.
  */
 
-#define LIBCHECKPOINT_CONTRACT_VERSION 1
+#define LIBCHECKPOINT_CONTRACT_VERSION 2
 /* The bytes "TPCT" in a little-endian word. */
 #define LIBCHECKPOINT_CONTRACT_MAGIC 0x54435054
 #define LIBCHECKPOINT_CONTRACT_KIND_RUNTIME 1
 #define LIBCHECKPOINT_CONTRACT_KIND_MODULE 2
-#define LIBCHECKPOINT_CONTRACT_HEADER_SIZE 40
+#define LIBCHECKPOINT_CONTRACT_HEADER_SIZE 48
 
 /* A runtime record lists what its archive provides; a module record lists
  * what the rewritten module requires. */
@@ -67,7 +67,21 @@
 #define LIBCHECKPOINT_CAPABILITY_RISCV64_FLOAT_STATE 0x20
 #define LIBCHECKPOINT_CAPABILITY_X64_VECTOR_SSE 0x40
 #define LIBCHECKPOINT_CAPABILITY_X64_VECTOR_AVX 0x80
-#define LIBCHECKPOINT_CAPABILITIES_KNOWN 0xff
+#define LIBCHECKPOINT_CAPABILITY_FAULT_TRAINING 0x100
+#define LIBCHECKPOINT_CAPABILITY_FAULT_PUBLISHING 0x200
+#define LIBCHECKPOINT_CAPABILITIES_KNOWN 0x3ff
+
+#ifdef ENABLE_FAULT_PUBLISHING
+#define LIBCHECKPOINT_PROVIDES_FAULT_PUBLISHING LIBCHECKPOINT_CAPABILITY_FAULT_PUBLISHING
+#else
+#define LIBCHECKPOINT_PROVIDES_FAULT_PUBLISHING 0
+#endif
+
+#ifdef ENABLE_FAULT_TRAINING
+#define LIBCHECKPOINT_PROVIDES_FAULT_TRAINING LIBCHECKPOINT_CAPABILITY_FAULT_TRAINING
+#else
+#define LIBCHECKPOINT_PROVIDES_FAULT_TRAINING 0
+#endif
 
 #ifdef ENABLE_NESTED_SPECULATION
 #define LIBCHECKPOINT_PROVIDES_NESTED LIBCHECKPOINT_CAPABILITY_NESTED
@@ -115,10 +129,12 @@
 #define LIBCHECKPOINT_RUNTIME_CAPABILITIES \
     (LIBCHECKPOINT_PROVIDES_NESTED | LIBCHECKPOINT_PROVIDES_AARCH64_BTI_PAC | \
      LIBCHECKPOINT_PROVIDES_DIFT_RUNTIME | LIBCHECKPOINT_PROVIDES_X64_VECTOR | \
-     LIBCHECKPOINT_PROVIDES_COVERAGE | LIBCHECKPOINT_PROVIDES_RISCV64_FLOAT_STATE)
+     LIBCHECKPOINT_PROVIDES_COVERAGE | LIBCHECKPOINT_PROVIDES_RISCV64_FLOAT_STATE | \
+     LIBCHECKPOINT_PROVIDES_FAULT_TRAINING | LIBCHECKPOINT_PROVIDES_FAULT_PUBLISHING)
 
 #ifndef __ASSEMBLER__
 #include <stdint.h>
+struct teapot_fault_site_table;
 
 /* Followed by json_size bytes of JSON (none in the records tests make), then
  * zeros up to a multiple of eight bytes. */
@@ -133,6 +149,9 @@ struct libcheckpoint_contract_record {
     /* Module records: the runtime record's anchor label. Runtime records: the
      * start-up check, libcheckpoint_check_runtime_contract. */
     const void *anchor;
+    /* NULL in runtime records and modules without training. Non-NULL only
+     * with CAPABILITY_FAULT_TRAINING; retained by this relocation. */
+    const struct teapot_fault_site_table *fault_sites;
 };
 
 _Static_assert(sizeof(struct libcheckpoint_contract_record) == LIBCHECKPOINT_CONTRACT_HEADER_SIZE,

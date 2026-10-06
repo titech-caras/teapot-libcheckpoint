@@ -3,6 +3,12 @@
  * tests override its fields to check that the runtime refuses them. */
 #include "runtime_contract.h"
 #include "runtime_contract_fingerprint.h"
+#ifdef TEST_CONTRACT_FAULT_TABLE
+extern const struct teapot_fault_site_table fault_test_table;
+#define TEST_FAULT_TABLE &fault_test_table
+#else
+#define TEST_FAULT_TABLE 0
+#endif
 
 #ifndef TEST_CONTRACT_FINGERPRINT
 #define TEST_CONTRACT_FINGERPRINT LIBCHECKPOINT_CONTRACT_FINGERPRINT
@@ -39,6 +45,7 @@ static const char wrong_anchor[8];
     .fingerprint = TEST_CONTRACT_FINGERPRINT,           \
     .capabilities = TEST_CONTRACT_REQUIRED,             \
     .anchor = TEST_CONTRACT_ANCHOR,                     \
+    .fault_sites = TEST_FAULT_TABLE,                    \
 }
 
 #ifdef TEST_CONTRACT_JSON_BYTES
