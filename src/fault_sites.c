@@ -62,8 +62,12 @@ __asm__(".pushsection teapot_protected_bss,\"aw\"," FAULT_NOBITS "\n"
         "startup_maps:\n.zero 196608\n.size startup_maps,.-startup_maps\n"
         ".balign 8\n.local proc_buffer\n.type proc_buffer," FAULT_OBJECT "\n"
         "proc_buffer:\n.zero 4096\n.size proc_buffer,.-proc_buffer\n.popsection\n");
-extern struct mapping startup_maps[FAULT_MAP_LIMIT] __attribute__((aligned(8)));
-extern unsigned char proc_buffer[4096] __attribute__((aligned(8)));
+/* The compiler must know that these assembly-local definitions are not
+ * preemptible. Otherwise A64 PIE compilation emits GOT relocations which
+ * the assembler reduces to one section symbol plus different addends; those
+ * are not distinct GOT entries and alias the private objects at final link. */
+extern struct mapping startup_maps[FAULT_MAP_LIMIT] __attribute__((aligned(8), visibility("hidden")));
+extern unsigned char proc_buffer[4096] __attribute__((aligned(8), visibility("hidden")));
 _Static_assert(sizeof(startup_maps) == 196608 && sizeof(proc_buffer) == 4096,
                "keep NOBITS startup scratch reservations in sync with their types");
 LIBCHECKPOINT_ASSERT_PROTECTED(startup_maps);
@@ -376,8 +380,8 @@ __asm__(".pushsection teapot_protected_bss,\"aw\"," FAULT_NOBITS "\n"
         "fault_registry_pool:\n.zero 65536\n.size fault_registry_pool,.-fault_registry_pool\n"
         ".balign 65536\n.local fault_copy_pool\n.type fault_copy_pool," FAULT_OBJECT "\n"
         "fault_copy_pool:\n.zero 4194304\n.size fault_copy_pool,.-fault_copy_pool\n.popsection\n");
-extern union registry_pool fault_registry_pool __attribute__((aligned(65536)));
-extern uint32_t fault_copy_pool[FAULT_COPY_LIMIT] __attribute__((aligned(65536)));
+extern union registry_pool fault_registry_pool __attribute__((aligned(65536), visibility("hidden")));
+extern uint32_t fault_copy_pool[FAULT_COPY_LIMIT] __attribute__((aligned(65536), visibility("hidden")));
 _Static_assert(sizeof(fault_registry_pool) == 65536 && sizeof(fault_copy_pool) == 4194304,
                "keep immutable registry pools on exclusive whole pages");
 LIBCHECKPOINT_ASSERT_PROTECTED(fault_registry_pool);
