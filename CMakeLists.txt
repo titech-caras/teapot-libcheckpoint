@@ -13,6 +13,22 @@ include(cmake/RuntimeTargets.cmake)
 include(cmake/DiftWrappers.cmake)
 
 if(BUILD_TESTING)
+    # Archive visibility does not determine ownership: hidden and weak global
+    # definitions are runtime-owned as well. Never omit this coverage gate just
+    # because the capture tool or manifest is unavailable.
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    if(NOT CMAKE_NM)
+        message(FATAL_ERROR "CMAKE_NM is required for runtime export coverage")
+    endif()
+    foreach(archive IN ITEMS checkpoint checkpoint_nested
+                             checkpoint_dift_math_wrappers checkpoint_dift_zlib_wrappers)
+        if(TARGET ${archive})
+            add_test(NAME ${archive}_reserved_exports
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/runtime_exports.py"
+                    --manifest "${CMAKE_CURRENT_SOURCE_DIR}/tools/runtime_exports.json"
+                    --nm "${CMAKE_NM}" --archive "$<TARGET_FILE:${archive}>")
+        endif()
+    endforeach()
     include(CheckCSourceCompiles)
     add_executable(checkpoint_fault_sites_test tests/fault_sites.c tests/fault_sites.S src/fault_sites.c src/fault_x64.c)
     teapot_configure_checkpoint_target(checkpoint_fault_sites_test)
