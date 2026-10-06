@@ -33,7 +33,7 @@ set(_contract_abi
     "fault_sites.low_bound|TEAPOT_FAULT_LOW_BOUND"
     "fault_training|LCK_FAULT_TRAINING"
     "fault_publishing|LCK_FAULT_PUBLISHING"
-    "fault_windows.version|TEAPOT_FAULT_WINDOW_VERSION"
+    "fault_windows.version|TEAPOT_FAULT_PUBLISHER_VERSION"
     "fault_windows.entry_size|sizeof(struct teapot_fault_window_entry)"
     "fault_windows.low_policy|TEAPOT_FAULT_LOW_POLICY_VERSION"
     "word_size|sizeof(void *)"
@@ -98,6 +98,10 @@ elseif(CHECKPOINT_ARCH_NAME STREQUAL "aarch64")
             "checkpoint.reg.x${index}|offsetof(checkpoint_register_state_t, x${index})")
     endforeach()
     list(APPEND _contract_abi
+        "fault_risc.isolation|TEAPOT_FAULT_RISC_ISOLATION"
+        "fault_risc.policy_size|sizeof(struct teapot_fault_risc_policy)"
+        "fault_risc.recipe_version|TEAPOT_FAULT_RISC_RECIPE_VERSION"
+        "fault_risc.instruction_alignment|4"
         "dift.reg.sp|DIFT_REG_SP"
         "target_metadata.scratch_reg|CHECKPOINT_TARGET_SCRATCH_REG_ADDR"
         "target_metadata.fixed_reg0_source|CHECKPOINT_TARGET_FIXED_REG0_SOURCE"
@@ -128,6 +132,11 @@ elseif(CHECKPOINT_ARCH_NAME STREQUAL "riscv64")
             "checkpoint.reg.x${index}|offsetof(checkpoint_register_state_t, x${index})")
     endforeach()
     list(APPEND _contract_abi
+        "fault_risc.isolation|TEAPOT_FAULT_RISC_ISOLATION"
+        "fault_risc.policy_size|sizeof(struct teapot_fault_risc_policy)"
+        "fault_risc.recipe_version|TEAPOT_FAULT_RISC_RECIPE_VERSION"
+        "fault_risc.instruction_alignment|2"
+        "fault_risc.assembly_scope_version|TEAPOT_FAULT_RISC_ASSEMBLY_SCOPE_VERSION"
         "scratchpad.riscv64_original_tp|RISCV64_ORIGINAL_TP_OFFSET"
         "target_metadata.scratch_reg|CHECKPOINT_TARGET_SCRATCH_REG_ADDR"
         "target_metadata.fixed_reg0_source|CHECKPOINT_TARGET_FIXED_REG0_SOURCE"

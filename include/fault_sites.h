@@ -14,6 +14,24 @@
 #define TEAPOT_FAULT_X64_WINDOWS 2
 #define TEAPOT_FAULT_LOW_POLICY_VERSION 1 /* verified, page-rounded host bound */
 #define TEAPOT_FAULT_MAX_WINDOW 19
+#define TEAPOT_FAULT_RISC_VERSION 4
+#define TEAPOT_FAULT_RISC_ENTRY_SIZE 128
+#define TEAPOT_FAULT_RISC_WINDOWS 2
+#define TEAPOT_FAULT_RISC_ISOLATION 65536
+#define TEAPOT_FAULT_RISC_RECIPE_VERSION 1
+#define TEAPOT_FAULT_RISC_ASSEMBLY_SCOPE_VERSION 1
+#if defined(__aarch64__)
+#define FAULT_RISC_NATIVE 1
+#elif defined(__riscv) && __riscv_xlen == 64
+#define FAULT_RISC_NATIVE 2
+#else
+#define FAULT_RISC_NATIVE 0
+#endif
+#if defined(__x86_64__)
+#define TEAPOT_FAULT_PUBLISHER_VERSION TEAPOT_FAULT_WINDOW_VERSION
+#else
+#define TEAPOT_FAULT_PUBLISHER_VERSION TEAPOT_FAULT_RISC_VERSION
+#endif
 
 #ifndef __ASSEMBLER__
 #include <stdbool.h>
@@ -62,6 +80,31 @@ struct teapot_fault_window_entry {
 };
 _Static_assert(sizeof(struct teapot_fault_window_entry) == TEAPOT_FAULT_WINDOW_ENTRY_SIZE, "window entry size");
 
+/* RISC's whole four-byte instruction, never an x64 window or a NOP slot.
+ * All targets are field-relative. Dead-bootstrap provenance is checked by the
+ * emitter against validated original-input DDisasm masks before any raw split;
+ * consumers validate the exact instruction, recipe, template and final reach. */
+struct teapot_fault_risc_entry {
+    struct teapot_fault_site_entry site;
+    int32_t return_pc, copy_end, block_start, block_end;
+    int32_t spill, policy, rollback, stub_end;
+    uint32_t original;
+    uint8_t origin, width, base, index, extension, shift, destination;
+    uint8_t bootstrap, temp0, temp1, kind, padding;
+    int64_t displacement;
+    uint16_t spill_size, template_id;
+    uint8_t reserved[52];
+};
+_Static_assert(sizeof(struct teapot_fault_risc_entry) == TEAPOT_FAULT_RISC_ENTRY_SIZE, "RISC entry size");
+_Static_assert(offsetof(struct teapot_fault_risc_entry, original) == 48 &&
+               offsetof(struct teapot_fault_risc_entry, displacement) == 64 &&
+               offsetof(struct teapot_fault_risc_entry, reserved) == 76, "RISC entry offsets");
+
+struct teapot_fault_risc_policy { uintptr_t low, high; };
+#if FAULT_RISC_NATIVE
+extern struct teapot_fault_risc_policy teapot_fault_risc_policy;
+#endif
+
 _Static_assert(sizeof(struct teapot_fault_site_entry) == TEAPOT_FAULT_SITE_ENTRY_SIZE, "fault entry size");
 _Static_assert(sizeof(struct teapot_fault_site_table) == TEAPOT_FAULT_SITE_HEADER_SIZE, "fault header size");
 _Static_assert(__GCC_ATOMIC_INT_LOCK_FREE == 2 && sizeof(unsigned int) == 4,
@@ -108,6 +151,14 @@ void teapot_fault_registry_initialize(const void *records_begin, const void *rec
 void teapot_fault_registry_initialize_environment(const void *records_begin, const void *records_end,
                                                  char *const *environment);
 bool teapot_fault_lookup(uintptr_t pc, size_t *module, size_t *site);
+/* Only for synchronous kernel signals. A copied v4 load may have overwritten
+ * its destination with a private address. Recognize its PC without inspecting
+ * any GPR, and raw-stop an impossible inactive/replay context before forwarding
+ * or diagnostics. Nonpositive-code notifications keep baseline routing. */
+#if FAULT_RISC_NATIVE
+bool teapot_fault_risc_copied_kernel(uintptr_t pc, bool active_checkpoint, bool restoring_memlog)
+    __attribute__((visibility("hidden")));
+#endif
 bool teapot_fault_train(int sig, const siginfo_t *info, uintptr_t pc,
                         bool active_checkpoint, bool restoring_memlog);
 uint8_t teapot_fault_counter(size_t module, size_t site);

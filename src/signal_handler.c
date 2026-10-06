@@ -169,6 +169,20 @@ void signal_handler(int sig, siginfo_t *info, void *ucontext) {
      * codes, even when they interrupt a checkpoint or memory-log replay. */
     const bool kernel_fault = info && info->si_code > 0;
 
+#if defined(ENABLE_FAULT_TRAINING) && FAULT_RISC_NATIVE
+    /* Synchronous v4 copies are transient-only. Do not inspect, print or
+     * forward their changed bootstrap register, including impossible depth
+     * zero/replay contexts. Asynchronous reports (including positive-code MTE
+     * or machine-check notifications) and BTI/PAC/non-memory exceptions keep
+     * their baseline routing below. */
+    if ((sig == SIGSEGV || sig == SIGBUS) && signal_can_refault(sig, info) &&
+            teapot_fault_risc_copied_kernel(*pc, checkpoint_cnt != 0, in_restore_memlog != 0)) {
+        teapot_fault_train(sig, info, *pc, true, false);
+        *pc = (uintptr_t)&restore_checkpoint_SIGSEGV;
+        return;
+    }
+#endif
+
     if (kernel_fault && in_restore_memlog) {
         restart_restore_checkpoint_memlog(ucontext);
 #ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI

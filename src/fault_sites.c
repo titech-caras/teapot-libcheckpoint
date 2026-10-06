@@ -13,6 +13,13 @@
 #include <sys/personality.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#if FAULT_RISC_NATIVE
+#include "fault_risc_template.h"
+#endif
+
+#if defined(ENABLE_FAULT_PUBLISHING) && defined(__riscv) && !defined(__riscv_compressed)
+#error RISC-V fault publishing requires the C extension for halfword-aligned whole instructions
+#endif
 
 /* Startup must not prime the application's allocator or consume addresses
  * from mmap's placement cursor. Speculative reads of freed memory otherwise
@@ -43,6 +50,65 @@ static long fault_syscall3(long number, long a, long b, long c) {
 #error Unsupported fault runtime ISA
 #endif
 }
+
+#if defined(ENABLE_FAULT_PUBLISHING) && FAULT_RISC_NATIVE
+#include "fault_risc_publish.h"
+#endif
+
+#if FAULT_RISC_NATIVE
+__attribute__((noreturn)) static void fault_raw_stop(void) {
+    /* Neither a changed copy-fault context nor a partly restored executable
+     * mapping may reach diagnostics, libc, or an application signal handler. */
+    fault_syscall3(SYS_exit_group, 127, 0, 0);
+    for (;;) __asm__ volatile ("" ::: "memory");
+}
+#endif
+
+#if defined(__riscv) && __riscv_xlen == 64
+static long fault_rv_syscall5(long number, long a, long b, long c, long d, long e) {
+    register long a7 __asm__("a7") = number;
+    register long a0 __asm__("a0") = a;
+    register long a1 __asm__("a1") = b;
+    register long a2 __asm__("a2") = c;
+    register long a3 __asm__("a3") = d;
+    register long a4 __asm__("a4") = e;
+    __asm__ volatile ("ecall" : "+r"(a0) : "r"(a7), "r"(a1), "r"(a2), "r"(a3), "r"(a4) : "memory");
+    return a0;
+}
+#endif
+
+struct fault_risc_host_proof {
+    uintptr_t low, high, page_size;
+    uint32_t isa, low_failures;
+    int64_t hwprobe_result, hwprobe_key, tagged_control;
+    uint64_t hwprobe_value;
+};
+#if FAULT_RISC_NATIVE
+static uintptr_t fault_risc_high_bound(struct fault_risc_host_proof *proof) {
+    proof->isa = FAULT_RISC_NATIVE;
+    proof->hwprobe_result = proof->tagged_control = -ENOSYS;
+    proof->hwprobe_key = -1;
+#if defined(__riscv) && __riscv_xlen == 64
+    /* Linux UAPI: syscall 258, hwprobe key 7, PR_GET_TAGGED_ADDR_CTRL=56.
+     * Query actual effective PMLEN, never satp or CPU capability inference.
+     * Both queries run even when adaptation is disabled. Unknown => no high
+     * predicate; a recognized hwprobe value is an exclusive user-space end.
+     * See scripts/syscall.tbl and arch/riscv/kernel/{sys_hwprobe,process}.c. */
+    struct { int64_t key; uint64_t value; } pair = {7, 0};
+    long probe = fault_rv_syscall5(258, (long)&pair, 1, 0, 0, 0);
+    long tagged = fault_rv_syscall5(SYS_prctl, 56, 0, 0, 0, 0);
+    proof->hwprobe_result = probe; proof->hwprobe_key = pair.key;
+    proof->hwprobe_value = pair.value; proof->tagged_control = tagged;
+    const unsigned long pmlen_mask = 0x7fUL << 24;
+    if (probe || pair.key != 7 || tagged < 0 ||
+            ((unsigned long)tagged & ~(pmlen_mask | 1UL)) || ((unsigned long)tagged & pmlen_mask)) return 0;
+    if (pair.value == (UINT64_C(1) << 38) || pair.value == (UINT64_C(1) << 47) ||
+            pair.value == (UINT64_C(1) << 56)) return (uintptr_t)pair.value;
+#endif
+    /* A64 has no approved query proving its active VA ceiling. */
+    return 0;
+}
+#endif
 
 #define FAULT_MAP_LIMIT 8192
 struct mapping { uintptr_t start, end; char permissions[5]; };
@@ -174,11 +240,25 @@ bool teapot_fault_resolve_relative(uintptr_t anchor, int64_t relative, uintptr_t
 static const struct teapot_fault_site_entry *entry(const struct teapot_fault_site_table *t, size_t i) {
     return (const void *)((const unsigned char *)t + sizeof(*t) + i * t->entry_size);
 }
-static bool windows(const struct teapot_fault_site_table *t) {
+static bool x64_windows(const struct teapot_fault_site_table *t) {
+#if defined(__x86_64__)
     return t->version == TEAPOT_FAULT_WINDOW_VERSION && t->flags == TEAPOT_FAULT_X64_WINDOWS;
+#else
+    (void)t; return false;
+#endif
+}
+static bool risc_windows(const struct teapot_fault_site_table *t) {
+    return FAULT_RISC_NATIVE && t->version == TEAPOT_FAULT_RISC_VERSION && t->flags == TEAPOT_FAULT_RISC_WINDOWS;
+}
+static bool windows(const struct teapot_fault_site_table *t) {
+    return x64_windows(t) || risc_windows(t);
 }
 uintptr_t teapot_fault_low_bound LIBCHECKPOINT_PROTECTED_SECTION_ALIGNED(8);
 LIBCHECKPOINT_ASSERT_PROTECTED(teapot_fault_low_bound);
+#if FAULT_RISC_NATIVE
+struct teapot_fault_risc_policy teapot_fault_risc_policy LIBCHECKPOINT_PROTECTED_SECTION_ALIGNED(8);
+LIBCHECKPOINT_ASSERT_PROTECTED(teapot_fault_risc_policy);
+#endif
 extern void restore_checkpoint_SIGSEGV(void) __attribute__((weak));
 
 static bool validate_window(const struct teapot_fault_window_entry *e, uintptr_t pc, uintptr_t copy,
@@ -201,17 +281,41 @@ static bool validate_window(const struct teapot_fault_window_entry *e, uintptr_t
     return true;
 }
 
+#if FAULT_RISC_NATIVE
+static bool validate_risc_window(const struct teapot_fault_risc_entry *e, uintptr_t pc, uintptr_t stub,
+        uintptr_t copy, uintptr_t text_start, uintptr_t text_end, uintptr_t stub_limit,
+        uintptr_t protected_start, uintptr_t protected_end) {
+    uintptr_t ret, copy_end, bs, be, spill, policy, rollback, stub_end;
+    uint32_t replacement;
+    unsigned char expected[128]; size_t copy_offset;
+    if (!RESOLVE(e, return_pc, ret) || !RESOLVE(e, copy_end, copy_end) ||
+        !RESOLVE(e, block_start, bs) || !RESOLVE(e, block_end, be) || !RESOLVE(e, spill, spill) ||
+        !RESOLVE(e, policy, policy) || !RESOLVE(e, rollback, rollback) || !RESOLVE(e, stub_end, stub_end) ||
+        ret != pc + 4 || copy_end != copy + 4 || bs < text_start || bs > pc || be < ret || be > text_end ||
+        stub_end > stub_limit || stub_end <= copy_end || (spill & 7) || spill < protected_start ||
+        protected_end - protected_start < e->spill_size || spill > protected_end - e->spill_size ||
+        policy != (uintptr_t)&teapot_fault_risc_policy || !restore_checkpoint_SIGSEGV ||
+        rollback != (uintptr_t)restore_checkpoint_SIGSEGV ||
+        !fault_risc_branch(FAULT_RISC_NATIVE, pc, stub, &replacement)) return false;
+    size_t size = fault_risc_template(e, FAULT_RISC_NATIVE, stub, spill, policy, ret, rollback,
+                                      expected, sizeof(expected), &copy_offset);
+    return size && stub_end - stub == size && copy == stub + copy_offset;
+}
+#endif
+
 bool teapot_fault_validate_table(const struct teapot_fault_site_table *t, size_t bytes,
                                  uintptr_t protected_start, uintptr_t protected_end) {
     uintptr_t text_start, text_end, stub_start, stub_end, counters, counters_end, pending, pending_end;
     if (!t || ((uintptr_t)t & 7) || bytes < sizeof(*t) ||
         t->magic != TEAPOT_FAULT_SITE_MAGIC ||
         t->header_size != sizeof(*t) || t->threshold > 255 || !t->count ||
+        (risc_windows(t) && t->count > UINT32_C(1048576)) ||
         t->reserved[0] || t->reserved[1] || t->reserved[2] ||
         !((t->version == TEAPOT_FAULT_SITE_VERSION && t->flags == TEAPOT_FAULT_SITE_TRAINING_ONLY &&
            t->entry_size == TEAPOT_FAULT_SITE_ENTRY_SIZE)
 #ifdef ENABLE_FAULT_PUBLISHING
-          || (windows(t) && t->entry_size == TEAPOT_FAULT_WINDOW_ENTRY_SIZE)
+          || (x64_windows(t) && t->entry_size == TEAPOT_FAULT_WINDOW_ENTRY_SIZE)
+          || (risc_windows(t) && t->entry_size == TEAPOT_FAULT_RISC_ENTRY_SIZE)
 #endif
           ) || t->count > (bytes - sizeof(*t)) / t->entry_size)
         return false;
@@ -231,7 +335,9 @@ bool teapot_fault_validate_table(const struct teapot_fault_site_table *t, size_t
         return false;
     /* Publishing may temporarily remove X from this range. The emitter and
      * final-link validator isolate it from ordinary/runtime .text pages. */
-    if (windows(t) && ((text_start | text_end) & 4095)) return false;
+    if (windows(t) && ((text_start | text_end) & (risc_windows(t) ? TEAPOT_FAULT_RISC_ISOLATION - 1 : 4095)))
+        return false;
+    if (risc_windows(t) && (counters_end != pending || stub_start != text_start || stub_end != text_end)) return false;
     uintptr_t previous_end = 0, previous_spill_end = 0;
     for (size_t i = 0; i < t->count; ++i) {
         uintptr_t pc, stub, copy;
@@ -249,8 +355,10 @@ bool teapot_fault_validate_table(const struct teapot_fault_site_table *t, size_t
             (stub >= pc ? stub - pc >= (UINT64_C(1) << 27) :
                                      pc - stub > (UINT64_C(1) << 27))) return false;
 #elif defined(__riscv)
-        /* Even with RVC elsewhere, replacement is a single aligned 32-bit JAL. */
-        if (length != 4 || (pc & 3) || (stub & 3) || (copy & 3) ||
+        /* v4 requires C and permits a whole four-byte JAL at a halfword.
+         * Preserve the historical v2 table contract; no alignment NOPs. */
+        unsigned alignment_mask = risc_windows(t) ? 1 : 3;
+        if (length != 4 || (pc & alignment_mask) || (stub & alignment_mask) || (copy & alignment_mask) ||
             (stub >= pc ? stub - pc >= (UINT64_C(1) << 20) :
                                      pc - stub > (UINT64_C(1) << 20))) return false;
 #else
@@ -258,7 +366,7 @@ bool teapot_fault_validate_table(const struct teapot_fault_site_table *t, size_t
             (stub >= pc + 5 ? stub - (pc + 5) > INT32_MAX :
                                     pc + 5 - stub > (UINT64_C(1) << 31))) return false;
 #endif
-        if (windows(t)) {
+        if (x64_windows(t)) {
             const struct teapot_fault_window_entry *w = (const void *)e;
             uintptr_t spill;
             if (!validate_window(w, pc, copy, protected_start, protected_end) ||
@@ -266,6 +374,15 @@ bool teapot_fault_validate_table(const struct teapot_fault_site_table *t, size_t
                 (spill < counters_end && counters < spill + 24) ||
                 (spill < pending_end && pending < spill + 24)) return false;
             previous_spill_end = spill + 24;
+#if FAULT_RISC_NATIVE
+        } else if (risc_windows(t)) {
+            const struct teapot_fault_risc_entry *w = (const void *)e;
+            uintptr_t spill;
+            if (!validate_risc_window(w, pc, stub, copy, text_start, text_end, stub_end,
+                                      protected_start, protected_end) || !RESOLVE(w, spill, spill) ||
+                spill != (i ? previous_spill_end : pending_end)) return false;
+            previous_spill_end = spill + w->spill_size;
+#endif
         }
         previous_end = pc + length;
     }
@@ -372,7 +489,10 @@ struct module_sites {
 #define FAULT_COPY_LIMIT 1048576
 #ifdef ENABLE_FAULT_TRAINING
 union registry_pool {
-    struct module_sites modules[FAULT_MODULE_LIMIT];
+    struct {
+        struct module_sites modules[FAULT_MODULE_LIMIT];
+        struct fault_risc_host_proof proof;
+    } state;
     unsigned char pages[65536];
 };
 __asm__(".pushsection teapot_protected_bss,\"aw\"," FAULT_NOBITS "\n"
@@ -442,6 +562,16 @@ static bool registry_storage_overlap(uintptr_t start, uintptr_t end) {
     return (start < modules + sizeof(fault_registry_pool) && modules < end) ||
            (start < copies + sizeof(fault_copy_pool) && copies < end);
 }
+#if FAULT_RISC_NATIVE
+static bool risc_private_overlap(uintptr_t start, uintptr_t end) {
+    uintptr_t maps = (uintptr_t)startup_maps, buffer = (uintptr_t)proc_buffer;
+    uintptr_t policy = (uintptr_t)&teapot_fault_risc_policy;
+    return registry_storage_overlap(start, end) ||
+           (start < maps + sizeof(startup_maps) && maps < end) ||
+           (start < buffer + sizeof(proc_buffer) && buffer < end) ||
+           (start < policy + sizeof(teapot_fault_risc_policy) && policy < end);
+}
+#endif
 static void sort_modules(struct module_sites *modules, size_t count) {
     /* At most 256 modules: insertion sort needs no heap or scratch mapping. */
     for (size_t i = 1; i < count; ++i) {
@@ -496,7 +626,8 @@ static bool original_overlap(const struct teapot_fault_site_table *t, uintptr_t 
 }
 
 #ifdef ENABLE_FAULT_TRAINING
-static const uint32_t *initialize_copies(const struct teapot_fault_site_table *t, uint32_t *copies) {
+static const uint32_t *initialize_copies(const struct teapot_fault_site_table *t, uint32_t *copies,
+                                        const struct mapping *maps, size_t nmap) {
     for (size_t i = 0; i < t->count; ++i) {
         uintptr_t original, copy;
         const struct teapot_fault_site_entry *e = entry(t, i);
@@ -505,12 +636,13 @@ static const uint32_t *initialize_copies(const struct teapot_fault_site_table *t
          * are unsupported by the emitter/final validator: copies are exact. */
         if (original_overlap(t, copy, e->length))
             reject_sites("copy differs from or overlaps an original access");
-        if (windows(t)) {
+        if (x64_windows(t)) {
 #ifdef ENABLE_FAULT_PUBLISHING
             const struct teapot_fault_window_entry *w = (const void *)e;
             uintptr_t stub, se, spill;
             RESOLVE(e, stub, stub); RESOLVE(t, stub_end, se); RESOLVE(w, spill, spill);
-            if (registry_storage_overlap(spill, spill + 24)) reject_sites("spill aliases immutable registry storage");
+            if (registry_storage_overlap(spill, spill + 24) || !mapped(maps, nmap, spill, spill + 24, true, false))
+                reject_sites("spill mapping or immutable registry overlap");
             unsigned char template[160], original_window[24];
             size_t size = teapot_fault_x64_template(w, template, sizeof(template));
             if (!size || size > se - stub ||
@@ -522,6 +654,29 @@ static const uint32_t *initialize_copies(const struct teapot_fault_site_table *t
 #else
             reject_sites("publisher metadata in a training-only runtime");
 #endif
+        } else if (risc_windows(t)) {
+#if defined(ENABLE_FAULT_PUBLISHING) && FAULT_RISC_NATIVE
+            const struct teapot_fault_risc_entry *w = (const void *)e;
+            uintptr_t stub, spill, policy, ret, rollback;
+            RESOLVE(e, stub, stub); RESOLVE(w, spill, spill); RESOLVE(w, policy, policy);
+            RESOLVE(w, return_pc, ret); RESOLVE(w, rollback, rollback);
+            if (risc_private_overlap(spill, spill + w->spill_size) ||
+                !mapped(maps, nmap, spill, spill + w->spill_size, true, false) ||
+                !mapped(maps, nmap, policy, policy + sizeof(teapot_fault_risc_policy), true, false))
+                reject_sites("RISC spill/policy mapping or runtime-private overlap");
+            unsigned char expected[128]; size_t copy_offset;
+            size_t size = fault_risc_template(w, FAULT_RISC_NATIVE, stub, spill, policy, ret, rollback,
+                                              expected, sizeof(expected), &copy_offset);
+            if (!size || original_overlap(t, stub, size) || memcmp((const void *)stub, expected, size))
+                reject_sites("RISC stub template differs or overlaps an original");
+            for (unsigned j = 0; j < 4; ++j)
+                if (((const unsigned char *)original)[j] != (unsigned char)(w->original >> (8 * j)))
+                    reject_sites("RISC original instruction differs");
+            for (size_t j = 0; j < w->spill_size / 8; ++j)
+                if (((const uint64_t *)spill)[j]) reject_sites("RISC spill is not initially zero");
+#else
+            reject_sites("RISC publisher metadata in a training-only runtime");
+#endif
         } else if (memcmp((const void *)original, (const void *)copy, e->length))
             reject_sites("copy differs from original access");
 #if defined(__riscv)
@@ -531,9 +686,17 @@ static const uint32_t *initialize_copies(const struct teapot_fault_site_table *t
         copies[i] = (uint32_t)i;
     }
     sort_copies(t, copies);
-    for (size_t i = 1; i < t->count; ++i)
+    for (size_t i = 1; i < t->count; ++i) {
         if (copy_address(t, copies[i - 1]) + entry(t, copies[i - 1])->length > copy_address(t, copies[i]))
             reject_sites("overlapping or duplicate copied access PCs");
+        if (risc_windows(t)) {
+            const struct teapot_fault_risc_entry *previous = (const void *)entry(t, copies[i - 1]);
+            const struct teapot_fault_risc_entry *next = (const void *)entry(t, copies[i]);
+            uintptr_t previous_end, next_start;
+            RESOLVE(previous, stub_end, previous_end); RESOLVE(&next->site, stub, next_start);
+            if (previous_end > next_start) reject_sites("overlapping RISC stubs");
+        }
+    }
     return copies;
 }
 #endif
@@ -568,12 +731,21 @@ void teapot_fault_registry_initialize_environment(const void *begin, const void 
 #else
     if (count > FAULT_MODULE_LIMIT) reject_sites("fault module capacity exceeded");
     long host_page = sysconf(_SC_PAGESIZE);
+#if FAULT_RISC_NATIVE
+    if (host_page != 4096 && host_page != 16384 && host_page != 65536) {
+        /* Unproved host page geometry: never publish or consume the table.
+         * Original accesses remain on the kernel path in both toggle modes. */
+        low_policy.failures = TEAPOT_FAULT_LOW_UNKNOWN | TEAPOT_FAULT_LOW_DISABLED;
+        registry_records = begin;
+        return;
+    }
+#endif
     if (host_page <= 0 || ((unsigned long)host_page & ((unsigned long)host_page - 1)) || host_page > 65536)
         reject_sites("unsupported registry page size");
     size_t nmap;
     if (!read_mappings(&nmap)) reject_sites("cannot verify mapping permissions within bounded snapshot");
     const struct mapping *maps = startup_maps;
-    struct module_sites *snapshot = fault_registry_pool.modules;
+    struct module_sites *snapshot = fault_registry_pool.state.modules;
     size_t copies_used = 0;
     size_t index = 0;
     for (const char *p = begin; p < (const char *)end;) {
@@ -591,10 +763,11 @@ void teapot_fault_registry_initialize_environment(const void *begin, const void 
             reject_sites("publisher capability/format disagreement");
 #ifdef ENABLE_FAULT_PUBLISHING
         if (windows(t) && !publication_page_size) {
-            long page = sysconf(_SC_PAGESIZE);
+            long page = host_page;
             /* The x64 emitter/final ELF contract isolates 4-KiB base pages.
              * Query before instrumentation, never through libc while RW. */
-            if (page != 4096) reject_sites("publisher requires 4-KiB base pages");
+            if (x64_windows(t) ? page != 4096 : (page != 4096 && page != 16384 && page != 65536))
+                reject_sites("unsupported publisher base-page size");
             publication_page_size = (uintptr_t)page;
         }
 #endif
@@ -614,13 +787,17 @@ void teapot_fault_registry_initialize_environment(const void *begin, const void 
         RESOLVE(t, pending_start, ps); RESOLVE(t, pending_end, pe);
         if (registry_storage_overlap(cs, ce) || registry_storage_overlap(ps, pe))
             reject_sites("counter aliases immutable registry storage");
+#if FAULT_RISC_NATIVE
+        if (risc_windows(t) && (risc_private_overlap(cs, ce) || risc_private_overlap(ps, pe)))
+            reject_sites("RISC counter aliases runtime-private storage");
+#endif
         if (!mapped(maps, nmap, m->start, m->end, false, true) ||
             !mapped(maps, nmap, ss, se, false, true) ||
             !mapped(maps, nmap, cs, ce, true, false) || !mapped(maps, nmap, ps, pe, true, false))
             reject_sites("text/counter mapping permissions");
         m->table = t; m->counters = (void *)cs; m->pending = (void *)ps;
         if (t->count > FAULT_COPY_LIMIT - copies_used) reject_sites("fault site capacity exceeded");
-        m->copies = initialize_copies(t, fault_copy_pool + copies_used);
+        m->copies = initialize_copies(t, fault_copy_pool + copies_used, maps, nmap);
         copies_used += t->count;
         for (size_t j = 0; j < (ce - cs) / 4; ++j)
             if (m->counters[j] || m->pending[j]) reject_sites("counter area is not initially zero");
@@ -631,11 +808,39 @@ void teapot_fault_registry_initialize_environment(const void *begin, const void 
             if ((cs < other_ce && other_cs < ce) || (ps < other_pe && other_ps < pe) ||
                 (cs < other_pe && other_ps < ce) || (ps < other_ce && other_cs < pe))
                 reject_sites("modules share counter storage");
+            /* v4 state is one contiguous counter/pending/spill reservation,
+             * checked above. Compare whole owned ranges, not only counters. */
+            if (risc_windows(t) || risc_windows(snapshot[j].table)) {
+                uintptr_t this_end = pe, other_end = other_pe;
+                if (risc_windows(t)) {
+                    const struct teapot_fault_risc_entry *last = (const void *)entry(t, t->count - 1);
+                    RESOLVE(last, spill, this_end); this_end += last->spill_size;
+                }
+                if (risc_windows(snapshot[j].table)) {
+                    const struct teapot_fault_site_table *other = snapshot[j].table;
+                    const struct teapot_fault_risc_entry *last = (const void *)entry(other, other->count - 1);
+                    RESOLVE(last, spill, other_end); other_end += last->spill_size;
+                }
+                uintptr_t this_start = cs < ps ? cs : ps, other_start = other_cs < other_ps ? other_cs : other_ps;
+                if (ce > this_end) this_end = ce;
+                if (other_ce > other_end) other_end = other_ce;
+                if (this_start < other_end && other_start < this_end) reject_sites("modules share RISC state");
+            }
         }
     }
     sort_modules(snapshot, count);
     for (size_t i = 1; i < count; ++i)
         if (snapshot[i - 1].end > snapshot[i].start) reject_sites("overlapping module text ranges");
+#if FAULT_RISC_NATIVE
+    /* Keep query results in the immutable pool, apart from mutable guard
+     * enables. The same collector runs with adaptation on and off. It uses
+     * only startup scratch, no heap or anonymous mapping placement history. */
+    struct teapot_fault_low_policy verified_low = teapot_fault_verify_low(0, true);
+    struct fault_risc_host_proof *proof = &fault_registry_pool.state.proof;
+    proof->low = verified_low.bound; proof->low_failures = verified_low.failures;
+    proof->page_size = (uintptr_t)host_page;
+    proof->high = fault_risc_high_bound(proof);
+#endif
     if (fault_syscall3(SYS_mprotect, (long)&fault_registry_pool, sizeof(fault_registry_pool), PROT_READ) ||
         fault_syscall3(SYS_mprotect, (long)fault_copy_pool, sizeof(fault_copy_pool), PROT_READ))
         reject_sites("registry protection");
@@ -655,13 +860,29 @@ void teapot_fault_registry_initialize_environment(const void *begin, const void 
 #ifdef ENABLE_FAULT_PUBLISHING
     bool publisher=false;
     for (size_t i=0;i<count;i++) publisher |= windows(snapshot[i].table);
+#if defined(__x86_64__)
     if (publisher && !teapot_fault_x64_can_publish_addresses())
         training_enabled=0;
+#elif defined(__riscv) && __riscv_xlen == 64
+    /* Flags 0 synchronizes the process across migration. A denied/missing
+     * syscall leaves the kernel path; local fence.i is not a substitute.
+     * Run this preflight identically with the environment toggle on and off. */
+    if (publisher && fault_syscall3(259, 0, 0, 0)) training_enabled=0;
+#else
+    (void)publisher;
+#endif
 #endif
 #else
     training_enabled = 0;
 #endif
+#if FAULT_RISC_NATIVE
+    low_policy = verified_low;
+    if (!training_enabled) { low_policy.bound = 0; low_policy.failures |= TEAPOT_FAULT_LOW_DISABLED; }
+    teapot_fault_risc_policy.low = low_policy.bound;
+    teapot_fault_risc_policy.high = training_enabled ? proof->high : 0;
+#else
     low_policy = teapot_fault_verify_low(0, training_enabled != 0);
+#endif
     teapot_fault_low_bound = low_policy.bound;
     registry = snapshot; registry_count = count; registry_records = begin;
 #endif
@@ -693,6 +914,17 @@ bool teapot_fault_lookup(uintptr_t pc, size_t *module, size_t *site) {
     *module = lo;
     return true;
 }
+#if FAULT_RISC_NATIVE
+bool teapot_fault_risc_copied_kernel(uintptr_t pc, bool active, bool replay) {
+    size_t module, site;
+    if (!teapot_fault_lookup(pc, &module, &site) || !risc_windows(registry[module].table))
+        return false;
+    uintptr_t copy;
+    if (!RESOLVE(entry(registry[module].table, site), copy_pc, copy) || copy != pc) return false;
+    if (!active || replay) fault_raw_stop();
+    return true;
+}
+#endif
 bool teapot_fault_train(int sig, const siginfo_t *info, uintptr_t pc, bool active, bool replay) {
     /* MAPERR/ACCERR are synchronous data faults at an emitted access PC.
      * SI_KERNEL (e.g. x64 #GP), MTE, BTI, PAC and asynchronous signals are not
@@ -755,6 +987,28 @@ static bool publish_site(size_t module, size_t site) {
     if (module >= registry_count || site >= registry[module].table->count) reject_sites("bad queued site");
     const struct module_sites *m = &registry[module];
     if (!windows(m->table)) return true; /* training-only tables never publish */
+#if FAULT_RISC_NATIVE
+    if (!risc_windows(m->table)) return false;
+    const struct teapot_fault_risc_entry *w = (const void *)entry(m->table, site);
+    uintptr_t pc, stub;
+    uint32_t replacement;
+    if (!RESOLVE(&w->site, fault_pc, pc) || !RESOLVE(&w->site, stub, stub) ||
+        !fault_risc_branch(FAULT_RISC_NATIVE, pc, stub, &replacement)) return false;
+    uintptr_t page = publication_page_size;
+    if (!page || pc > UINTPTR_MAX - 4) return false;
+    uintptr_t first = pc & ~(page - 1);
+    size_t count = 1 + ((pc + 3) / page - pc / page);
+    struct fault_risc_page pages[2];
+    for (size_t i = 0; i < count; ++i) {
+        pages[i].address = first + i * page;
+        if (pages[i].address < m->start || pages[i].address > m->end - page ||
+            !fault_risc_current_page_policy(pages[i].address, page, PROT_READ | PROT_EXEC,
+                                            &pages[i].original_protection)) return false;
+    }
+    enum fault_risc_patch_result result = fault_risc_publish_word(pc, w->original, replacement, page, pages, count);
+    if (result == FAULT_RISC_PATCH_UNSAFE) fault_raw_stop();
+    return result == FAULT_RISC_PATCH_PUBLISHED;
+#else
     const struct teapot_fault_window_entry *w = (const void *)entry(m->table, site);
     uintptr_t pc, stub;
     RESOLVE(&w->site, fault_pc, pc); RESOLVE(&w->site, stub, stub);
@@ -782,6 +1036,7 @@ static bool publish_site(size_t module, size_t site) {
     if (teapot_fault_x64_mprotect((void *)first, last - first, PROT_READ | PROT_EXEC))
         reject_sites("cannot restore executable protections after undoing publication");
     return false;
+#endif
 }
 #endif
 
@@ -811,7 +1066,12 @@ void teapot_fault_publish_pending(void) {
     __atomic_store_n(&event_count, 0, __ATOMIC_RELAXED);
     __atomic_store_n(&event_overflow, 0, __ATOMIC_RELAXED);
     __atomic_store_n(&events_pending, 0, __ATOMIC_RELEASE);
-    if (publication_disabled) { training_enabled = 0; teapot_fault_low_bound = 0; }
+    if (publication_disabled) {
+        training_enabled = 0; teapot_fault_low_bound = 0;
+#if FAULT_RISC_NATIVE
+        teapot_fault_risc_policy.low = teapot_fault_risc_policy.high = 0;
+#endif
+    }
     if (syscall(SYS_rt_sigprocmask,SIG_SETMASK,&previous,NULL,sizeof(previous)))
         reject_sites("cannot restore signal mask");
 #endif
