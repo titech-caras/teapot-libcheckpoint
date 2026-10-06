@@ -181,6 +181,91 @@ The zlib tests compare actual output/status against unwrapped zlib and check
 byte tags, unused tails, buffered output, stream lifetimes, dictionaries, partial
 errors and protected-page boundaries on each supported ISA.
 
+### Owned mappings and unchanged software-tag stores
+
+The default `TEAPOT_SHADOW_MAPPING_ENFORCEMENT=ON` contract provides capability
+`shadow_mapping_enforcement` (`0x400`). It enables Teapot's per-write no-op
+elision only for complete 1/2/4/8-byte chunks inside successfully created,
+anonymous private, normal read/write software-DIFT shadow mappings. The runtime
+records these mappings, separately classifying helper stacks and protected
+runtime storage as owned but **not** DIFT shadow. Published readiness, registry
+bounds and valid memory-history position/capacity are required. Every old shadow
+load still executes. Equality to that load, not to a pre-window value, skips
+both the log entry and the store. A changed value keeps the existing log-field,
+top-publication and mutation ordering; rollback remains LIFO. Queue application
+and clearing, replay flush boundaries and MTE allocation-tag history are unchanged.
+If the complete proof is unavailable, the original eager path remains, including
+its readable-but-non-writable-shadow store fault.
+
+Programs must not modify Teapot-owned mappings or their accessibility. The
+single-threaded runtime owns these mappings for its lifetime; its normal DIFT
+pages remain writable and are neither MMIO nor atomic/shared synchronization
+storage. Teapot retargets the imported symbol identities for `mprotect`,
+`pkey_mprotect`, `munmap`, `mremap`, `mmap` and `mmap64` throughout the rewritten
+module, including constructor and function-pointer references. Protection/unmap
+requests and old/fixed-new remap ranges are checked; only fixed-address mmap
+requests can replace an existing owned mapping. An overlap aborts with a clear,
+allocation-free diagnostic before reaching libc's mapping operation. The
+runtime archive itself is not rewritten: legitimate internal mapping/permission
+changes retain their original libc binding, and internal raw fault-publisher
+syscalls also remain usable. There is no application-wide exemption switch.
+
+Huge-page footprints use the encoded `MAP_HUGETLB` size, allocation-free
+`/proc/meminfo` default-size discovery, hugetlbfs `fstatfs`, or the source VMA's
+hugetlb status/page size in `/proc/self/smaps`. THP does not inflate a syscall
+footprint. Fixed equal-length multi-VMA remaps also inspect the final source
+segment, protecting the union of first-VMA and final-hugetlb-tail rounding across
+the Linux ABI variants. Unknown required metadata fails closed, not by assuming 4-KiB pages.
+Unrelated ordinary calls preserve the original result and errno. Address checks
+follow the particular syscall: protection/unmap/old-remap addresses use x64's
+queried LAM mask, A64's Linux `untagged_addr` transform, or RV64's queried actual
+PMLEN and tagged-ABI enable state. Fixed mmap/new-remap addresses are not
+blanket-masked. An uncertain A64 tagged fixed-address request is refused because
+the relevant kernel ABI changed in 5.6; canonical addresses are not version-gated.
+Unknown address transforms also refuse. The post-startup address-mode stability
+rule is specified with the unsupported routes below.
+If the x64 query fails, only independently proved LAM hardware absence permits
+identity fallback. RV64 supports exactly the current PMLEN set `{0,7,16}`: a
+failed mode query permits only operands unchanged by **every** transform in
+that set, including sign extension. Other operands and reported future modes
+fail closed. An invalid canonical address still reaches libc/kernel unchanged
+when its transform and nonoverlapping footprint are proved.
+
+File-backed fixed mappings and source-VMA-inspected remaps keep classification
+and the original mapping call inside one raw signal-mask critical section;
+default anonymous huge-page-size discovery does likewise. This prevents a
+handler from replacing a descriptor or source VMA after it was classified.
+The previous mask is restored, allowing deferred delivery, while preserving
+the mapping call's result and errno. Ordinary anonymous non-huge mappings,
+non-fixed mmap calls, protection changes and unmapping acquire no such guard.
+Loader-internal mappings in `ld.so`/`dlopen` do not pass through these wrappers.
+All catchable signals are temporarily masked; a fault-number exception would
+also admit user-generated signals and reopen the handler race. Application
+synchronous faults are not diverted or reconstructed by this feature. The
+bounded runtime query/call path uses valid internal buffers and performs no
+new faulting application-memory access; hardware faults inside that masked
+runtime path are not claimed mask-independent. Failure to restore the mask
+terminates rather than returning with a silently changed signal mask.
+
+This is whole-module libc-symbol mediation, not universal OS interposition.
+Unmediated mutation or accessibility changes on owned ranges are unsupported,
+including raw application syscalls, `dlsym`-obtained pointers, calls inside
+unrewritten DSOs, `shmat(SHM_REMAP)`, `remap_file_pages`, destructive `madvise`
+variants, PKRU/`WRPKRU` changes and userfaultfd write protection. Their unrelated
+uses are not rejected merely because a program imports the APIs. The program
+rule covers these routes even though there is no preload/seccomp interposer.
+
+In an enforcing runtime (`shadow_mapping_enforcement=1`), the tagged-address
+mode (RV PMLEN, A64 tagged-address ABI, x64 LAM) must not change after startup;
+doing so is unsupported, like unmediated mapping calls. This rule applies
+regardless of the separate fault-adaptation setting. Ordinary `mprotect`,
+`pkey_mprotect` and `munmap` keep their existing no-extra-signal-mask behavior.
+
+Configure `TEAPOT_SHADOW_MAPPING_ENFORCEMENT=OFF` for the explicit eager mode.
+Legacy contracts lacking the capability also emit the old eager replay; an
+enforcing emitter must not link or start with an unenforcing runtime. The
+capability, registry ABI and fingerprint are part of component-cache identity.
+
 Shadow-tag instrumented binaries must link ASan.  Libcheckpoint expects ASan
 shadow memory to exist; there is no fallback ASan shadow mapper.  Runtime
 metadata lives in `teapot_protected` and `teapot_protected_bss`, both poisoned

@@ -199,6 +199,13 @@ if(BUILD_TESTING)
         DEFINITIONS TEST_CONTRACT_VERSION=999)
     teapot_add_contract_test(capability "capabilities this archive lacks: nested"
         DEFINITIONS TEST_CONTRACT_REQUIRED=LIBCHECKPOINT_CAPABILITY_NESTED)
+    if(TEAPOT_SHADOW_MAPPING_ENFORCEMENT)
+        teapot_add_contract_test(shadow_enforcement "contract accepted" ACCEPTED
+            DEFINITIONS TEST_CONTRACT_REQUIRED=LIBCHECKPOINT_CAPABILITY_SHADOW_MAPPING_ENFORCEMENT)
+    else()
+        teapot_add_contract_test(shadow_enforcement "capabilities this archive lacks: shadow_mapping_enforcement"
+            DEFINITIONS TEST_CONTRACT_REQUIRED=LIBCHECKPOINT_CAPABILITY_SHADOW_MAPPING_ENFORCEMENT)
+    endif()
     teapot_add_contract_test(anchor "does not refer to this runtime"
         DEFINITIONS TEST_CONTRACT_WRONG_ANCHOR)
     teapot_add_contract_test(magic "malformed module contract record"
@@ -233,9 +240,28 @@ if(BUILD_TESTING)
         endif()
     endforeach()
 
-    add_executable(checkpoint_dift_mapping_test tests/dift_mapping.c)
+    add_executable(checkpoint_dift_mapping_test tests/dift_mapping.c src/shadow_mapping.c)
     teapot_configure_checkpoint_target(checkpoint_dift_mapping_test)
     add_test(NAME checkpoint_dift_mapping COMMAND checkpoint_dift_mapping_test)
+
+    if(TEAPOT_SHADOW_MAPPING_ENFORCEMENT)
+        add_executable(checkpoint_shadow_mapping_test tests/shadow_mapping.c src/shadow_mapping.c)
+        teapot_configure_checkpoint_target(checkpoint_shadow_mapping_test)
+        target_compile_options(checkpoint_shadow_mapping_test PRIVATE -fno-pie)
+        target_link_options(checkpoint_shadow_mapping_test PRIVATE -no-pie
+            -Wl,--wrap=mprotect -Wl,--wrap=pkey_mprotect -Wl,--wrap=munmap
+            -Wl,--wrap=mremap -Wl,--wrap=mmap -Wl,--wrap=mmap64)
+        add_test(NAME checkpoint_shadow_mapping COMMAND checkpoint_shadow_mapping_test)
+        set_tests_properties(checkpoint_shadow_mapping PROPERTIES TIMEOUT 30)
+        add_executable(checkpoint_shadow_mapping_footprints_test tests/shadow_mapping_footprints.c)
+        teapot_configure_checkpoint_target(checkpoint_shadow_mapping_footprints_test)
+        target_compile_options(checkpoint_shadow_mapping_footprints_test PRIVATE -fno-pie)
+        target_link_options(checkpoint_shadow_mapping_footprints_test PRIVATE -no-pie
+            -Wl,--wrap=mprotect -Wl,--wrap=pkey_mprotect -Wl,--wrap=munmap
+            -Wl,--wrap=mremap -Wl,--wrap=mmap -Wl,--wrap=mmap64)
+        add_test(NAME checkpoint_shadow_mapping_footprints COMMAND checkpoint_shadow_mapping_footprints_test)
+        set_tests_properties(checkpoint_shadow_mapping_footprints PROPERTIES TIMEOUT 30)
+    endif()
 
     foreach(check IN ITEMS VALID BAD_SIZE BAD_ALIGNMENT REDUCED_ALIGNMENT)
         add_test(NAME checkpoint_protected_object_${check}

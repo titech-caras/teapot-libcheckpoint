@@ -1,4 +1,5 @@
 #include "dift_support.h"
+#include "shadow_mapping.h"
 
 #include <errno.h>
 #include <stdbool.h>
@@ -103,7 +104,7 @@ static void remember_runtime_range(uintptr_t start, uintptr_t end) {
     runtime_mapped_range_count++;
 }
 
-void map_runtime_shadow_range(uintptr_t start, uintptr_t end, int prot) {
+static void map_shadow_range(uintptr_t start, uintptr_t end, int prot, int dift) {
     start = page_down(start);
     end = page_up(end);
 
@@ -135,8 +136,13 @@ void map_runtime_shadow_range(uintptr_t start, uintptr_t end, int prot) {
 
         map_fixed_pages(cursor, map_end, prot);
         remember_runtime_range(cursor, map_end);
+        teapot_shadow_register_owned(cursor, map_end, dift && prot == (PROT_READ | PROT_WRITE));
         cursor = map_end;
     }
+}
+
+void map_runtime_shadow_range(uintptr_t start, uintptr_t end, int prot) {
+    map_shadow_range(start,end,prot,0);
 }
 
 static uintptr_t dift_xor_granularity(void) {
@@ -158,7 +164,7 @@ static void map_contiguous_dift_shadow_for_app_range(uintptr_t app_start, uintpt
     uintptr_t shadow_b = (uintptr_t)DIFT_MEM_ADDR(app_end - 1) + 1;
     uintptr_t shadow_start = shadow_a < shadow_b ? shadow_a : shadow_b;
     uintptr_t shadow_end = shadow_a < shadow_b ? shadow_b : shadow_a;
-    map_runtime_shadow_range(shadow_start, shadow_end, PROT_READ | PROT_WRITE);
+    map_shadow_range(shadow_start, shadow_end, PROT_READ | PROT_WRITE,1);
 }
 
 static void map_dift_shadow_for_app_range(uintptr_t app_start, uintptr_t app_end) {
@@ -191,6 +197,7 @@ void map_dift_pages() {
 #ifdef DIFT_APP_RANGE4_START
     map_dift_shadow_for_app_range(DIFT_APP_RANGE4_START, DIFT_APP_RANGE4_END);
 #endif
+    __atomic_store_n(&teapot_shadow_mapping_ready, TEAPOT_SHADOW_MAPPING_ENFORCEMENT, __ATOMIC_RELEASE);
 }
 
 __attribute__((noinline)) void dift_set_mem_tags(void *addr, dift_tag_t tag, size_t len) {

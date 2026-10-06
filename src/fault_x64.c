@@ -28,7 +28,10 @@ bool teapot_fault_x64_can_publish_addresses(void) {
     /* Linux ARCH_GET_UNTAG_MASK. Older build headers lack the UAPI name.
      * Raw >=2^56 is not a proof under LAM. If the kernel query is unavailable,
      * hardware without LAM is another exact proof (e.g. this AMD host).
-     * Later enabling address masking is unsupported while adaptation is on. */
+     * Later enabling address masking is unsupported while adaptation is on.
+     * The independent enforcing-mode stability rule applies even with
+     * adaptation off; see README.md, "Owned mappings and unchanged
+     * software-tag stores". */
     uint64_t mask=0;
     if (syscall(SYS_arch_prctl,0x4001,&mask)==0) return mask==UINT64_MAX;
     unsigned eax,ebx,ecx,edx;

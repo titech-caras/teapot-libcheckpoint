@@ -406,6 +406,7 @@ extern const char __stop_teapot_contract[] __attribute__((weak));
 static const char *const contract_capability_names[] = {
     "nested", "aarch64_bti_pac", "dift_runtime", "x64_vector_full", "coverage",
     "riscv64_float_state", "x64_vector_sse", "x64_vector_avx", "fault_training", "fault_publishing",
+    "shadow_mapping_enforcement",
 };
 _Static_assert((1u << (sizeof(contract_capability_names) / sizeof(*contract_capability_names))) - 1 ==
                LIBCHECKPOINT_CAPABILITIES_KNOWN, "name every contract capability");

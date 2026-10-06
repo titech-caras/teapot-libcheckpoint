@@ -7,6 +7,7 @@ set(TEAPOT_DIFT_LAYOUT "" CACHE STRING "Teapot DIFT layout profile")
 set(TEAPOT_AARCH64_TAG_STORAGE "shadow" CACHE STRING "AArch64 Teapot ASan-style tag storage backend: shadow or mte")
 
 option(TEAPOT_ENABLE_DIFT_RUNTIME "Enable libcheckpoint DIFT shadow initialization" ON)
+option(TEAPOT_SHADOW_MAPPING_ENFORCEMENT "Refuse application libc mapping changes to Teapot-owned memory" ON)
 set(_coverage_default OFF)
 if(CMAKE_C_COMPILER MATCHES "hfuzz")
     set(_coverage_default ON)
