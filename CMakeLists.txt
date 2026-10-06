@@ -4,6 +4,10 @@ project(libcheckpoint C ASM)
 
 include(CTest)
 
+# Require declarations in every C archive and fixture, including on compilers
+# older than GCC 14 which otherwise only warn before deleting unreachable calls.
+add_compile_options("$<$<COMPILE_LANGUAGE:C>:-Werror=implicit-function-declaration>")
+
 include(GNUInstallDirs)
 include(cmake/Options.cmake)
 include(cmake/TargetArchitecture.cmake)
