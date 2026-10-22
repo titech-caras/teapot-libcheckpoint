@@ -277,6 +277,88 @@ teapot_signal_function signal__teapot_wrapper__(int sig, teapot_signal_function 
     return previous.sa_handler;
 }
 
+/* glibc hides this obsolete alias declaration with _GNU_SOURCE/XOPEN2K8,
+ * although its exported entry point remains available for existing programs. */
+extern teapot_signal_function bsd_signal(int, teapot_signal_function);
+
+static teapot_signal_function install_sysv_signal(int sig, teapot_signal_function handler) {
+    if (handler == SIG_ERR || sig < 1 || sig >= NSIG) {
+        errno = EINVAL;
+        return SIG_ERR;
+    }
+    struct sigaction action = {
+        .sa_handler = handler, .sa_flags = SA_RESETHAND | SA_NODEFER
+    }, previous;
+#ifdef SA_INTERRUPT
+    /* Obsolete on Linux, but present in glibc's recorded SysV action. */
+    action.sa_flags |= SA_INTERRUPT;
+#endif
+    sigemptyset(&action.sa_mask);
+    if (sigaction__teapot_wrapper__(sig, &action, &previous) != 0)
+        return SIG_ERR;
+    return previous.sa_handler;
+}
+
+teapot_signal_function __sysv_signal__teapot_wrapper__(int sig, teapot_signal_function handler) {
+    struct saved_signal_action *saved = saved_action_for_signal(sig);
+    if (!saved || !saved->valid)
+        return __sysv_signal(sig, handler);
+    return install_sysv_signal(sig, handler);
+}
+
+teapot_signal_function sysv_signal__teapot_wrapper__(int sig, teapot_signal_function handler) {
+    struct saved_signal_action *saved = saved_action_for_signal(sig);
+    if (!saved || !saved->valid)
+        return sysv_signal(sig, handler);
+    return install_sysv_signal(sig, handler);
+}
+
+teapot_signal_function bsd_signal__teapot_wrapper__(int sig, teapot_signal_function handler) {
+    struct saved_signal_action *saved = saved_action_for_signal(sig);
+    if (!saved || !saved->valid)
+        return bsd_signal(sig, handler);
+    return signal__teapot_wrapper__(sig, handler);
+}
+
+teapot_signal_function ssignal__teapot_wrapper__(int sig, teapot_signal_function handler) {
+    struct saved_signal_action *saved = saved_action_for_signal(sig);
+    if (!saved || !saved->valid)
+        return ssignal(sig, handler);
+    return signal__teapot_wrapper__(sig, handler);
+}
+
+teapot_signal_function sigset__teapot_wrapper__(int sig, teapot_signal_function handler) {
+    struct saved_signal_action *saved = saved_action_for_signal(sig);
+    if (!saved || !saved->valid)
+        return sigset(sig, handler);
+
+    sigset_t set, previous_mask;
+    struct sigaction previous;
+    sigemptyset(&set);
+    if (sigaddset(&set, sig) != 0)
+        return SIG_ERR;
+    if (handler == SIG_HOLD) {
+        if (sigprocmask(SIG_BLOCK, &set, &previous_mask) != 0)
+            return SIG_ERR;
+        if (sigismember(&previous_mask, sig) == 1)
+            return SIG_HOLD;
+        if (sigaction__teapot_wrapper__(sig, NULL, &previous) != 0)
+            return SIG_ERR;
+        return previous.sa_handler;
+    }
+
+    /* sigset is persistent, with an empty sa_mask and no action flags. It is
+     * not glibc's one-shot __sysv_signal interface. Install before unblocking,
+     * and return SIG_HOLD when the previous thread mask held this signal. */
+    struct sigaction action = { .sa_handler = handler, .sa_flags = 0 };
+    sigemptyset(&action.sa_mask);
+    if (sigaction__teapot_wrapper__(sig, &action, &previous) != 0)
+        return SIG_ERR;
+    if (sigprocmask(SIG_UNBLOCK, &set, &previous_mask) != 0)
+        return SIG_ERR;
+    return sigismember(&previous_mask, sig) == 1 ? SIG_HOLD : previous.sa_handler;
+}
+
 /* Written once at setup and never read during simulation, so it may stay
  * outside the protected section. File scope gives it the same symbol name with
  * every compiler, for the protected-globals test. */

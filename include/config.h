@@ -1,5 +1,8 @@
 #pragma once
 
+/* Runtime implementation fact, not a checkpoint-layout ABI change. */
+#define LIBCHECKPOINT_SIGNAL_INSTALLER_COVERAGE 1
+
 #ifdef ENABLE_NESTED_SPECULATION
 #define MAX_CHECKPOINTS 6
 #define SPECFUZZ_PRIORITIZED_SIMULATION

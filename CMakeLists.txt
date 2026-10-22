@@ -17,6 +17,11 @@ include(cmake/RuntimeTargets.cmake)
 include(cmake/DiftWrappers.cmake)
 
 if(BUILD_TESTING)
+    add_executable(checkpoint_signal_installers_test tests/signal_installers.c)
+    teapot_configure_checkpoint_target(checkpoint_signal_installers_test)
+    target_compile_options(checkpoint_signal_installers_test PRIVATE -Wno-deprecated-declarations)
+    add_test(NAME checkpoint_signal_installers COMMAND checkpoint_signal_installers_test)
+    set_tests_properties(checkpoint_signal_installers PROPERTIES TIMEOUT 30)
     # Archive visibility does not determine ownership: hidden and weak global
     # definitions are runtime-owned as well. Never omit this coverage gate just
     # because the capture tool or manifest is unavailable.

@@ -167,6 +167,7 @@ endforeach()
 # The runtime's own facts and build switches: recorded, never compared.
 set(_contract_runtime
     "capabilities|LIBCHECKPOINT_RUNTIME_CAPABILITIES"
+    "signal_installer_coverage|LIBCHECKPOINT_SIGNAL_INSTALLER_COVERAGE"
     "max_checkpoints|MAX_CHECKPOINTS"
     "mem_history_len|MEM_HISTORY_LEN"
     "guard_list_len|GUARD_LIST_LEN"

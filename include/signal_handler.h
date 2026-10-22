@@ -7,3 +7,8 @@ int sigaction__teapot_wrapper__(int sig, const struct sigaction *action,
                                 struct sigaction *old_action);
 typedef void (*teapot_signal_function)(int);
 teapot_signal_function signal__teapot_wrapper__(int sig, teapot_signal_function handler);
+teapot_signal_function __sysv_signal__teapot_wrapper__(int sig, teapot_signal_function handler);
+teapot_signal_function sysv_signal__teapot_wrapper__(int sig, teapot_signal_function handler);
+teapot_signal_function bsd_signal__teapot_wrapper__(int sig, teapot_signal_function handler);
+teapot_signal_function ssignal__teapot_wrapper__(int sig, teapot_signal_function handler);
+teapot_signal_function sigset__teapot_wrapper__(int sig, teapot_signal_function handler);
