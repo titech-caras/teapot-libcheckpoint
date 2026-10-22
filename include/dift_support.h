@@ -9,10 +9,11 @@
 
 #define ENABLE_DIFT
 
+// The FPGA card's DIFT label encoding, so report tags mean the same on both.
 #define TAG_ATTACKER 1
-#define TAG_ATTACKER_INDIRECT 2
-#define TAG_SECRET 16
-#define TAG_SECRET_INDIRECT 32
+#define TAG_ATTACKER_INDIRECT 4
+#define TAG_SECRET 2
+#define TAG_SECRET_INDIRECT 8
 
 #ifndef __ASSEMBLER__
 typedef uint8_t dift_tag_t;
