@@ -26,6 +26,14 @@ if(BUILD_TESTING)
     # definitions are runtime-owned as well. Never omit this coverage gate just
     # because the capture tool or manifest is unavailable.
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    foreach(runtime_archive IN ITEMS checkpoint checkpoint_nested)
+        if(TARGET ${runtime_archive})
+            add_test(NAME ${runtime_archive}_riscv_profile_contract
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/riscv_profile_contract.py"
+                    --manifest "${CMAKE_CURRENT_BINARY_DIR}/lib${runtime_archive}.contract.json"
+                    --profile "${TEAPOT_RISCV_PROFILE}")
+        endif()
+    endforeach()
     if(NOT CMAKE_NM)
         message(FATAL_ERROR "CMAKE_NM is required for runtime export coverage")
     endif()
@@ -289,6 +297,11 @@ if(BUILD_TESTING)
             SPECFUZZ_PRIORITIZED_SIMULATION TIME COVERAGE_PROVIDER_WITHOUT_GUARD)
         target_compile_options(checkpoint_entry_priority_test PRIVATE -fno-pie)
         target_link_options(checkpoint_entry_priority_test PRIVATE -no-pie -Wl,--no-relax)
+        if(TEAPOT_RISCV_PROFILE STREQUAL "lp64-pure")
+            target_sources(checkpoint_entry_priority_test PRIVATE tests/riscv_pure_illegal.S)
+            target_link_options(checkpoint_entry_priority_test PRIVATE
+                -Wl,--wrap=restore_checkpoint -Wl,--wrap=sigaction)
+        endif()
         add_test(NAME checkpoint_entry_priority_capacity
             COMMAND checkpoint_entry_priority_test capacity)
         set_tests_properties(checkpoint_entry_priority_capacity PROPERTIES TIMEOUT 10)
@@ -392,6 +405,18 @@ if(BUILD_TESTING)
         COMMAND checkpoint_signal_handler_test unmanaged)
     add_test(NAME checkpoint_signal_user_faults
         COMMAND checkpoint_signal_handler_test user-faults)
+    if(TEAPOT_RISCV_PROFILE STREQUAL "lp64-pure")
+        add_executable(checkpoint_riscv_pure_sigill_test
+            tests/riscv_pure_sigill.c tests/riscv_pure_illegal.S src/signal_handler.c)
+        teapot_configure_checkpoint_target(checkpoint_riscv_pure_sigill_test)
+        target_link_options(checkpoint_riscv_pure_sigill_test PRIVATE
+            -Wl,--wrap=fprintf -Wl,--wrap=strsignal -Wl,--wrap=sigaction)
+        add_library(checkpoint_riscv_pure_fcsr_fixture OBJECT tests/riscv_pure_illegal.S)
+        teapot_configure_checkpoint_target(checkpoint_riscv_pure_fcsr_fixture)
+        target_compile_definitions(checkpoint_riscv_pure_fcsr_fixture PRIVATE TEST_PURE_FCSR_ONLY)
+        add_test(NAME checkpoint_riscv_pure_sigill COMMAND checkpoint_riscv_pure_sigill_test)
+        set_tests_properties(checkpoint_riscv_pure_sigill PROPERTIES TIMEOUT 30)
+    endif()
     add_executable(checkpoint_fault_signal_test
         tests/signal_handler.c tests/fault_sites.S src/signal_handler.c src/fault_sites.c src/fault_x64.c)
     teapot_configure_checkpoint_target(checkpoint_fault_signal_test)
@@ -462,14 +487,22 @@ if(BUILD_TESTING)
         target_link_options(${entry_test} PRIVATE -no-pie)
         if(CHECKPOINT_ARCH_NAME STREQUAL "riscv64")
             target_link_options(${entry_test} PRIVATE -Wl,--no-relax)
-            target_sources(${entry_test} PRIVATE
-                tests/checkpoint_riscv64_float.c tests/checkpoint_riscv64_float.S)
-            # Registered either way: without the FP state the rollback leaves
-            # the speculative values, and the test must notice.
-            add_test(NAME checkpoint_entry_${mode}_riscv64_float COMMAND ${entry_test} riscv64-float)
-            set_tests_properties(checkpoint_entry_${mode}_riscv64_float PROPERTIES TIMEOUT 10)
-            if(NOT TEAPOT_ENABLE_RISCV_FLOAT_STATE)
-                set_tests_properties(checkpoint_entry_${mode}_riscv64_float PROPERTIES WILL_FAIL TRUE)
+            if(TEAPOT_RISCV_PROFILE STREQUAL "lp64-pure")
+                target_sources(${entry_test} PRIVATE tests/riscv_pure_illegal.S)
+                target_link_options(${entry_test} PRIVATE -Wl,--wrap=restore_checkpoint -Wl,--wrap=sigaction)
+                add_test(NAME checkpoint_entry_${mode}_riscv64_pure_sigill
+                    COMMAND ${entry_test} riscv64-pure-sigill)
+                set_tests_properties(checkpoint_entry_${mode}_riscv64_pure_sigill PROPERTIES TIMEOUT 30)
+            else()
+                target_sources(${entry_test} PRIVATE
+                    tests/checkpoint_riscv64_float.c tests/checkpoint_riscv64_float.S)
+                # Legacy coverage is unchanged: without FP state the rollback
+                # leaves speculative values, and this test must notice.
+                add_test(NAME checkpoint_entry_${mode}_riscv64_float COMMAND ${entry_test} riscv64-float)
+                set_tests_properties(checkpoint_entry_${mode}_riscv64_float PROPERTIES TIMEOUT 10)
+                if(NOT TEAPOT_ENABLE_RISCV_FLOAT_STATE)
+                    set_tests_properties(checkpoint_entry_${mode}_riscv64_float PROPERTIES WILL_FAIL TRUE)
+                endif()
             endif()
         endif()
         foreach(check IN ITEMS capacity timing storage memlog memlog-validation memlog-order queued-tags coverage

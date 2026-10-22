@@ -240,7 +240,11 @@ static void check_signal_return(void) {
     }
     int status;
     assert(waitpid(child, &status, 0) == child);
+#ifdef TEAPOT_RISCV_LP64_PURE
+    assert(WIFEXITED(status) && WEXITSTATUS(status) == LIBCHECKPOINT_RISCV_PURE_SIGILL_EXIT_STATUS);
+#else
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+#endif
 }
 
 static volatile sig_atomic_t application_calls;
@@ -380,7 +384,11 @@ static void check_post_setup_registration(void) {
     }
     int status;
     assert(waitpid(child, &status, 0) == child);
+#ifdef TEAPOT_RISCV_LP64_PURE
+    assert(WIFEXITED(status) && WEXITSTATUS(status) == LIBCHECKPOINT_RISCV_PURE_SIGILL_EXIT_STATUS);
+#else
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+#endif
 }
 
 int main(int argc, char **argv) {

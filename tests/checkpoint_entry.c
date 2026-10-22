@@ -64,6 +64,80 @@ static bool queue_force_fault;
 static bool coverage_test;
 static __attribute__((noreturn)) void coverage_transient_body(void);
 
+#ifdef TEAPOT_RISCV_LP64_PURE
+#include "riscv_pure_signal_verify.h"
+static unsigned pure_sigill_kind;
+static volatile uint64_t *pure_rollback_calls;
+extern __attribute__((noreturn)) void __real_restore_checkpoint(int reason);
+__attribute__((noreturn)) void __wrap_restore_checkpoint(int reason) {
+    if (pure_sigill_kind) {
+        ++*pure_rollback_calls;
+        _exit(93);  /* Any soft rollback is a failed C1 test, never success. */
+    }
+    __real_restore_checkpoint(reason);
+}
+
+static __attribute__((noreturn)) void pure_sigill_transient_body(void) {
+    assert(checkpoint_cnt > 0);
+    assert(simulation_statistics.rollback_reason[ROLLBACK_SIGSEGV] == 0);
+    if (pure_sigill_kind == 3)
+        in_restore_memlog = 1;
+    pure_sigill_instruction(pure_sigill_kind);
+    _exit(94);  /* Runner erroneously allowed the forbidden instruction. */
+}
+
+static void check_riscv64_pure_sigill(void) {
+    pure_rollback_calls = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                              MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    assert(pure_rollback_calls != MAP_FAILED);
+    pure_verified_kernel_events = pure_rollback_calls + 1;
+    unsigned cases = 0;
+    for (unsigned kind = 1; kind <= 3; ++kind)
+    for (unsigned depth = 0; depth < MAX_CHECKPOINTS; ++depth) {
+        int output[2];
+        assert(pipe(output) == 0);
+        pid_t child = fork();
+        assert(child >= 0);
+        if (child == 0) {
+            close(output[0]);
+            assert(dup2(output[1], STDERR_FILENO) >= 0);
+            close(output[1]);
+            pure_sigill_kind = kind;
+            memset(&simulation_statistics, 0, sizeof(simulation_statistics));
+            checkpoint_cnt = depth;
+            max_checkpoints = MAX_CHECKPOINTS;
+            branch_counter = 0;
+            memory_history_top = memory_history;
+            guard_list_top = guard_list;
+            setup_signal_handler();
+            /* This is the real assembly checkpoint entry, not a synthetic
+             * checkpoint_cnt-only handler call. No ASan startup qualification
+             * is claimed: this remains the existing entry unit-test harness. */
+            checkpoint_rollback_probe(stack_top);
+            _exit(95);
+        }
+        close(output[1]);
+        char diagnostic[256] = {0};
+        size_t length = 0;
+        ssize_t count;
+        while ((count = read(output[0], diagnostic + length, sizeof(diagnostic) - 1 - length)) > 0)
+            length += (size_t)count;
+        assert(count == 0);
+        close(output[0]);
+        int status;
+        assert(waitpid(child, &status, 0) == child);
+        assert(WIFEXITED(status) && WEXITSTATUS(status) == LIBCHECKPOINT_RISCV_PURE_SIGILL_EXIT_STATUS);
+        assert(strcmp(diagnostic, LIBCHECKPOINT_RISCV_PURE_SIGILL_DIAGNOSTIC) == 0);
+        assert(*pure_rollback_calls == 0);
+        ++cases;
+        assert(pure_rollback_calls[1] == cases);
+    }
+    printf("{\"real_checkpoint_sigill_cases\":%u,\"exact_pc_kernel_sigill_events\":%" PRIu64
+           ",\"soft_rollback_calls\":%" PRIu64 "}\n", cases, pure_rollback_calls[1], *pure_rollback_calls);
+    assert(munmap((void *)pure_rollback_calls, 4096) == 0);
+}
+#endif
+
 static void check_assertions(void) {
     int output[2];
     assert(pipe(output) == 0);
@@ -96,6 +170,10 @@ static void check_assertions(void) {
 
 /* The assembly probe tail-enters this only after a real checkpoint. */
 __attribute__((noreturn)) void checkpoint_test_transient_body(void) {
+#ifdef TEAPOT_RISCV_LP64_PURE
+    if (pure_sigill_kind)
+        pure_sigill_transient_body();
+#endif
     if (coverage_test)
         coverage_transient_body();
     memset(dift_reg_queued_tags, TAG_SECRET_INDIRECT, DIFT_REG_TAGS_SIZE);
@@ -649,10 +727,15 @@ int main(int argc, char **argv) {
         check_x64_df();
 #endif
 #if defined(__riscv)
+#ifdef TEAPOT_RISCV_LP64_PURE
+    else if (strcmp(argv[1], "riscv64-pure-sigill") == 0)
+        check_riscv64_pure_sigill();
+#else
     else if (strcmp(argv[1], "riscv64-float") == 0) {
         assert(check_riscv64_float != NULL);
         check_riscv64_float();
     }
+#endif
 #endif
 #if defined(__aarch64__)
     else if (strcmp(argv[1], "report") == 0)

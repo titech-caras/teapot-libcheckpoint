@@ -2,6 +2,12 @@
 
 #include <signal.h>
 
+/* A PURE kernel SIGILL is an unsupported instruction, never a rollback.
+ * Distinguish this fatal exit from successful speculative recovery. */
+#define LIBCHECKPOINT_RISCV_PURE_SIGILL_EXIT_STATUS (128 + SIGILL)
+#define LIBCHECKPOINT_RISCV_PURE_SIGILL_DIAGNOSTIC \
+    "Teapot: fatal lp64-pure kernel SIGILL during speculation or memlog replay\n"
+
 void setup_signal_handler(void);
 int sigaction__teapot_wrapper__(int sig, const struct sigaction *action,
                                 struct sigaction *old_action);

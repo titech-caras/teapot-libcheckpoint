@@ -25,6 +25,35 @@ cmake -S libcheckpoint -B build-libcheckpoint \
 cmake --build build-libcheckpoint
 ```
 
+### Explicit RV64 PURE profile
+
+`TEAPOT_RISCV_PROFILE=default` retains the legacy behavior and exact contract
+fields. `TEAPOT_RISCV_PROFILE=lp64-pure` is a separate, optional integer-only
+profile for the RV64 IMAC/Zicsr/Zifencei/Zicond compiler baseline and
+LP64 calling ABI. It refuses FP checkpoint state, FP/vector/B compiler targets,
+non-RV64, and AArch64 BTI/PAC. LP64 flags alone never establish FP-free code.
+Math/zlib wrappers receive the same compiler checks.
+
+The PURE contract fingerprints `riscv.calling_abi=lp64`,
+`riscv.profile=lp64-pure`, and `riscv.fp_policy=fp-free-fail-closed`.
+Default manifests receive none of these additions. After linking, run the
+toolchain's `objdump -d` check on the instrumented ELF and the runtime,
+wrapper and soft-float ASan libraries built by Teapot. Reject floating-point,
+vector, FP-CSR and vector-CSR instructions. Sysroot providers are not scanned.
+Run the instrumented program under QEMU with F/D disabled and
+`-R 0x4000000000`.
+
+A synchronous kernel SIGILL in an active checkpoint or memory-log replay writes
+`Teapot: fatal lp64-pure kernel SIGILL during speculation or memlog replay` and
+exits with status `128 + SIGILL` (132 on Linux), without fault training, recovery
+or SIGSEGV rollback. The handler uses only async-signal-safe `write`/`_exit` on
+that fatal path. Application `raise`/`kill`/`sigqueue` SIGILL and non-PURE routing
+are unchanged. PURE tests use raw illegal/FP/FCSR negative encodings; legacy
+LP64D floating-state checkpoint tests remain registered unchanged.
+User-mode QEMU permits FCSR accesses even with F/D disabled, so the objdump
+check must reject them. The signal tests use literal F/D/reserved instructions
+and check SIGILL/ILL_ILLOPC, the fault address and interrupted PC.
+
 The DIFT layout is a runtime build option.  Useful profiles include `x64-la48`,
 `x64-la48-asan-new`, `aarch64-vma39`, `aarch64-vma42`, `riscv64-sv39`, and
 `riscv64-sv48`, defined in `cmake/DiftLayoutData.cmake`.  Teapot takes the
@@ -57,9 +86,11 @@ installs them beside the archives. Each holds:
   never run, so cross builds work). The `fingerprint` hashes this section.
 - `capabilities`: what the archive provides (nested speculation, BTI+PAC, DIFT
   shadow set-up, how much x64 vector state it saves at least: full, AVX or SSE,
-  coverage, RISC-V FP state, fault training). Teapot requires the RISC-V FP state for every
-  RISC-V rewrite with checkpoints: without it a rollback does not restore the
+  coverage, RISC-V FP state, fault training). The legacy RISC-V profile requires
+  FP state for rewrites with checkpoints: without it a rollback does not restore the
   floating-point registers or FCSR (`-DTEAPOT_ENABLE_RISCV_FLOAT_STATE=ON`).
+  The explicit PURE profile above uses integer-only codegen, the post-link
+  objdump check and a fatal speculative SIGILL path instead.
 - `runtime` and `provenance`: facts of the runtime alone and the build, which
   are never compared.
 

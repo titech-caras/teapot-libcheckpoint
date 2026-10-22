@@ -38,3 +38,22 @@
 // Define only for riscv64 targets built with floating-point register support.
 // The base riscv64 ISA does not guarantee floating-point registers.
 //#define ENABLE_RISCV_FLOAT_STATE
+
+#ifdef TEAPOT_RISCV_LP64_PURE
+#if !defined(__riscv) || __riscv_xlen != 64 || !defined(__riscv_float_abi_soft)
+#error "lp64-pure requires the RV64 LP64 calling ABI"
+#endif
+#if defined(ENABLE_RISCV_FLOAT_STATE) || defined(TEAPOT_EXPERIMENTAL_AARCH64_BTI)
+#error "lp64-pure forbids FP checkpoint state and AArch64 BTI/PAC"
+#endif
+#if defined(__riscv_flen) || defined(__riscv_vector) || defined(__riscv_zfh) || \
+    defined(__riscv_zfhmin) || defined(__riscv_zfa) || defined(__riscv_zfinx) || \
+    defined(__riscv_zdinx) || defined(__riscv_zhinx) || defined(__riscv_zhinxmin) || \
+    defined(__riscv_zba) || defined(__riscv_zbb) || defined(__riscv_zbc) || defined(__riscv_zbs)
+#error "lp64-pure requires the approved IMAC/Zicsr/Zifencei/Zicond ISA without FP, vector or B"
+#endif
+#if !defined(__riscv_mul) || !defined(__riscv_atomic) || !defined(__riscv_compressed) || \
+    !defined(__riscv_zicsr) || !defined(__riscv_zifencei) || !defined(__riscv_zicond)
+#error "lp64-pure requires the published default IMAC/Zicsr/Zifencei/Zicond baseline"
+#endif
+#endif

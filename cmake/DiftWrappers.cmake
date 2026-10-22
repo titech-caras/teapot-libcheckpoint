@@ -7,6 +7,12 @@ function(teapot_configure_dift_wrapper_target target)
     target_compile_definitions(${target} PRIVATE
         DIFT_XOR_MASK=${DIFT_XOR_MASK}
         ${DIFT_RANGE_DEFS})
+    if(TEAPOT_RISCV_PROFILE STREQUAL "lp64-pure")
+        # Math/zlib wrappers must obey the same real compiler ABI/ISA check.
+        target_compile_definitions(${target} PRIVATE TEAPOT_RISCV_LP64_PURE)
+        target_compile_options(${target} PRIVATE
+            -include "${CMAKE_CURRENT_SOURCE_DIR}/include/config.h")
+    endif()
 endfunction()
 
 if(TEAPOT_BUILD_DIFT_MATH_WRAPPERS)

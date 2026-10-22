@@ -169,6 +169,19 @@ void signal_handler(int sig, siginfo_t *info, void *ucontext) {
      * codes, even when they interrupt a checkpoint or memory-log replay. */
     const bool kernel_fault = info && info->si_code > 0;
 
+#ifdef TEAPOT_RISCV_LP64_PURE
+    /* C1: a synchronous illegal instruction violates the reviewed PURE proof.
+     * Refuse before memory-log recovery as well as checkpoint rollback, so a
+     * decode/emission gap cannot be converted into successful soft recovery.
+     * No stdio, allocation, fault training or application callback is safe or
+     * appropriate here. write and _exit are async-signal-safe. */
+    if (sig == SIGILL && kernel_fault && (checkpoint_cnt != 0 || in_restore_memlog != 0)) {
+        static const char message[] = LIBCHECKPOINT_RISCV_PURE_SIGILL_DIAGNOSTIC;
+        (void)write(STDERR_FILENO, message, sizeof(message) - 1);
+        _exit(LIBCHECKPOINT_RISCV_PURE_SIGILL_EXIT_STATUS);
+    }
+#endif
+
 #if defined(ENABLE_FAULT_TRAINING) && FAULT_RISC_NATIVE
     /* Synchronous v4 copies are transient-only. Do not inspect, print or
      * forward their changed bootstrap register, including impossible depth
