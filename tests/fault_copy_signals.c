@@ -9,7 +9,9 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <ucontext.h>
+#include <unistd.h>
 
 scratchpad_t scratchpad;
 uint64_t checkpoint_cnt;
@@ -70,6 +72,22 @@ int main(void) {
             siginfo_t info={.si_signo=cases[i].signal,.si_code=cases[i].code};
             *context_pc(&context)=0x1000;checkpoint_cnt=state!=0;in_restore_memlog=state==2;
             expected_info=&info;expected_context=&context;copy_calls=forward_calls=0;
+#ifdef TEAPOT_RISCV_LP64_PURE
+            /* PURE fail-closes a synchronous kernel SIGILL during checkpoint
+             * or memlog replay: exit 132, no forwarding, no rollback. */
+            if(cases[i].signal==SIGILL && info.si_code>0 && state) {
+                pid_t child=fork();assert(child>=0);
+                if(!child) { /* forwarding or rollback would return here */
+                    signal_handler(cases[i].signal,&info,&context);
+                    _exit(95);
+                }
+                int status;assert(waitpid(child,&status,0)==child);
+                assert(WIFEXITED(status) &&
+                    WEXITSTATUS(status)==LIBCHECKPOINT_RISCV_PURE_SIGILL_EXIT_STATUS);
+                assert(!forward_calls);
+                ++checks;continue;
+            }
+#endif
             signal_handler(cases[i].signal,&info,&context);
             assert(copy_calls==(unsigned)cases[i].copied);
             if(cases[i].copied) {
