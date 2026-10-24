@@ -39,10 +39,41 @@ LIBCHECKPOINT_ASSERT_PROTECTED(report_maps_warning);
 #define REPORT_CHANNEL_ENV "HF_TEAPOT_REPORT_FD"
 
 static uint64_t report_channel_fd LIBCHECKPOINT_PROTECTED_SECTION = REPORT_CHANNEL_FD_NONE;
+/* Number of gadget records lost because the channel was momentarily full.
+ * Reported as a TPDROP record before the next successful gadget write. */
+static uint64_t report_channel_dropped LIBCHECKPOINT_PROTECTED_SECTION;
+/* Set when a non-pipe fd accepted only part of a gadget record. The next
+ * record is preceded by a newline so the two lines cannot merge. */
+static uint64_t report_channel_partial LIBCHECKPOINT_PROTECTED_SECTION;
+/* A TPDROP record may itself be written piecewise on a file or socket. Keep
+ * it in static storage so a later call can finish the same line. */
+static char report_channel_drop_record[40] LIBCHECKPOINT_PROTECTED_SECTION_ALIGNED(8);
+static size_t report_channel_drop_size LIBCHECKPOINT_PROTECTED_SECTION;
+static size_t report_channel_drop_offset LIBCHECKPOINT_PROTECTED_SECTION;
+static uint64_t report_channel_drop_base LIBCHECKPOINT_PROTECTED_SECTION;
+/* A permanently broken partial TPDROP is closed with "~\n". These fields make
+ * that marker itself resumable before the TPDROP is rebuilt. */
+static uint64_t report_channel_drop_marker LIBCHECKPOINT_PROTECTED_SECTION;
+static size_t report_channel_drop_marker_offset LIBCHECKPOINT_PROTECTED_SECTION;
 LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_fd);
+LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_dropped);
+LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_partial);
+LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_drop_record);
+LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_drop_size);
+LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_drop_offset);
+LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_drop_base);
+LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_drop_marker);
+LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_drop_marker_offset);
 
 void libcheckpoint_report_channel_init(void) {
     report_channel_fd = REPORT_CHANNEL_FD_NONE;
+    report_channel_dropped = 0;
+    report_channel_partial = 0;
+    report_channel_drop_size = 0;
+    report_channel_drop_offset = 0;
+    report_channel_drop_base = 0;
+    report_channel_drop_marker = 0;
+    report_channel_drop_marker_offset = 0;
 
     const char *value = getenv(REPORT_CHANNEL_ENV);
     if (value == NULL || *value == '\0')
@@ -59,6 +90,11 @@ void libcheckpoint_report_channel_init(void) {
     if (cursor == value || *cursor != '\0')
         return;
 
+    /* Never take over a standard stream: doing so would change the target's
+     * normal output and is never what a channel user intended. */
+    if (fd <= STDERR_FILENO)
+        return;
+
     int flags = fcntl((int)fd, F_GETFL);
     if (flags < 0)
         return;
@@ -71,28 +107,152 @@ void libcheckpoint_report_channel_init(void) {
     report_channel_fd = fd;
 }
 
-static void report_channel_write(const char *bytes, size_t size) {
+/* 1: complete, 0: permanent error, -1: would block (EAGAIN). *written reports
+ * how much of this call's record reached the fd. Pipe records are atomic, but
+ * a file or socket can accept only a prefix, so callers handle partial writes. */
+static int report_channel_write(const char *bytes, size_t size, size_t *written) {
     uint64_t fd = report_channel_fd;
+    size_t total = 0;
+    *written = 0;
     if (fd == REPORT_CHANNEL_FD_NONE)
-        return;
-    /* Records are smaller than PIPE_BUF, so a successful write is complete.
-     * Retry EINTR a bounded number of times and drop EAGAIN remainder. */
+        return 0;
     for (unsigned attempt = 0; size && attempt < 8; attempt++) {
-        ssize_t written = syscall(SYS_write, (int)fd, bytes, size);
-        if (written > 0) {
-            bytes += written;
-            size -= (size_t)written;
+        ssize_t count = syscall(SYS_write, (int)fd, bytes, size);
+        if (count > 0) {
+            bytes += count;
+            size -= (size_t)count;
+            total += (size_t)count;
             continue;
         }
-        if (written < 0 && errno == EINTR)
+        if (count < 0 && errno == EINTR)
             continue;
-        return;
+        *written = total;
+        if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            return -1;
+        return 0;
     }
+    *written = total;
+    return size == 0 ? 1 : -1;
+}
+
+static size_t report_channel_unsigned(char *out, uint64_t value) {
+    char digits[20];
+    size_t count = 0;
+    do {
+        digits[count++] = (char)('0' + value % 10);
+        value /= 10;
+    } while (value);
+    size_t size = 0;
+    while (count)
+        out[size++] = digits[--count];
+    return size;
+}
+
+/* A bare newline would make a record cut inside a number look valid (for
+ * example "0x1"). Append a marker that no record format accepts instead. */
+static bool report_channel_terminate_line(void) {
+    if (!report_channel_partial)
+        return true;
+    static const char marker[] = "~\n";
+    size_t written;
+    if (report_channel_write(marker, sizeof(marker) - 1, &written) != 1)
+        return false;
+    report_channel_partial = 0;
+    return true;
+}
+
+/* Finish a marker that closes an abandoned partial TPDROP. The marker is
+ * resumable, so a failed write never lets the rebuilt TPDROP merge with the
+ * unterminated fragment. */
+static bool report_channel_flush_drop_marker(void) {
+    if (!report_channel_drop_marker)
+        return true;
+    static const char marker[] = "~\n";
+    size_t written;
+    int result = report_channel_write(marker + report_channel_drop_marker_offset,
+                                      sizeof(marker) - 1 - report_channel_drop_marker_offset,
+                                      &written);
+    report_channel_drop_marker_offset += written;
+    if (result != 1)
+        return false;
+    report_channel_drop_marker = 0;
+    report_channel_drop_marker_offset = 0;
+    return true;
+}
+
+/* Finish the pending TPDROP record, resuming a partial write if needed.
+ * Accepted limitation: a count still pending when the target exits (for
+ * example after the final iteration) is never delivered. */
+static bool report_channel_flush_drops(void) {
+    if (report_channel_drop_marker) {
+        if (!report_channel_flush_drop_marker())
+            return false;
+        /* The old fragment is now invalidated; rebuild the whole TPDROP. */
+        report_channel_drop_size = 0;
+        report_channel_drop_offset = 0;
+        report_channel_drop_base = 0;
+    }
+
+    if (report_channel_drop_offset == 0 && report_channel_drop_size == 0) {
+        char *record = report_channel_drop_record;
+        size_t size = 0;
+        const char *prefix = "TPDROP 1 ";
+        while (*prefix)
+            record[size++] = *prefix++;
+        size += report_channel_unsigned(record + size, report_channel_dropped);
+        record[size++] = '\n';
+        report_channel_drop_size = size;
+        report_channel_drop_base = report_channel_dropped;
+    }
+
+    size_t written;
+    int result = report_channel_write(report_channel_drop_record + report_channel_drop_offset,
+                                      report_channel_drop_size - report_channel_drop_offset,
+                                      &written);
+    report_channel_drop_offset += written;
+    if (result != 1) {
+        /* A permanently broken partial TPDROP must not be followed by another
+         * record. Mark it invalid, but only discard the old record once the
+         * marker itself has been fully written. */
+        if (result == 0 && report_channel_drop_offset != 0) {
+            report_channel_drop_marker = 1;
+            report_channel_drop_marker_offset = 0;
+            if (report_channel_flush_drop_marker()) {
+                report_channel_drop_size = 0;
+                report_channel_drop_offset = 0;
+                report_channel_drop_base = 0;
+            }
+        }
+        return false;
+    }
+
+    /* Records dropped while this line was incomplete still need announcing. */
+    report_channel_dropped -= report_channel_drop_base;
+    report_channel_drop_base = 0;
+    report_channel_drop_size = 0;
+    report_channel_drop_offset = 0;
+    return true;
 }
 
 static void report_channel_gadget(int gadget_type, uint64_t gadget_addr) {
     if (report_channel_fd == REPORT_CHANNEL_FD_NONE)
         return;
+
+    /* A previous record may have been cut short on a non-pipe fd. */
+    if (!report_channel_terminate_line()) {
+        report_channel_dropped++;
+        return;
+    }
+
+    /* Announce records lost since the last successful write before sending a
+     * new one, so the reader can account for everything the channel held. */
+    if (report_channel_dropped) {
+        if (!report_channel_flush_drops()) {
+            /* Ordered before the gadget: this one is dropped as well. */
+            report_channel_dropped++;
+            return;
+        }
+    }
 
     char record[64];
     size_t size = 0;
@@ -108,19 +268,13 @@ static void report_channel_gadget(int gadget_type, uint64_t gadget_addr) {
     } else {
         magnitude = (uint64_t)value;
     }
-    char digits[20];
-    size_t count = 0;
-    do {
-        digits[count++] = (char)('0' + magnitude % 10);
-        magnitude /= 10;
-    } while (magnitude);
-    while (count)
-        record[size++] = digits[--count];
+    size += report_channel_unsigned(record + size, magnitude);
 
     record[size++] = ' ';
     record[size++] = '0';
     record[size++] = 'x';
-    count = 0;
+    char digits[20];
+    size_t count = 0;
     do {
         digits[count++] = "0123456789abcdef"[gadget_addr & 0xf];
         gadget_addr >>= 4;
@@ -129,7 +283,13 @@ static void report_channel_gadget(int gadget_type, uint64_t gadget_addr) {
         record[size++] = digits[--count];
     record[size++] = '\n';
 
-    report_channel_write(record, size);
+    size_t written;
+    int result = report_channel_write(record, size, &written);
+    if (result != 1) {
+        if (written != 0)
+            report_channel_partial = 1;
+        report_channel_dropped++;
+    }
 }
 
 static void report_write(const char *bytes, size_t size) {
