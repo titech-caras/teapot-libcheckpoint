@@ -1,4 +1,5 @@
 #include "checkpoint.h"
+#include "report_internal.h"
 #include "config.h"
 
 #include <errno.h>
@@ -30,6 +31,106 @@ static uint64_t report_maps_warning LIBCHECKPOINT_PROTECTED_SECTION;
 LIBCHECKPOINT_ASSERT_PROTECTED(report_buffer);
 LIBCHECKPOINT_ASSERT_PROTECTED(report_output_size);
 LIBCHECKPOINT_ASSERT_PROTECTED(report_maps_warning);
+
+/* Optional machine-readable gadget channel. The fd is resolved once while
+ * libcheckpoint is being enabled, never from the simulation path, so the
+ * reporting code below only needs write(2) and static, protected storage. */
+#define REPORT_CHANNEL_FD_NONE UINT64_MAX
+#define REPORT_CHANNEL_ENV "HF_TEAPOT_REPORT_FD"
+
+static uint64_t report_channel_fd LIBCHECKPOINT_PROTECTED_SECTION = REPORT_CHANNEL_FD_NONE;
+LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_fd);
+
+void libcheckpoint_report_channel_init(void) {
+    report_channel_fd = REPORT_CHANNEL_FD_NONE;
+
+    const char *value = getenv(REPORT_CHANNEL_ENV);
+    if (value == NULL || *value == '\0')
+        return;
+
+    uint64_t fd = 0;
+    const char *cursor = value;
+    while (*cursor >= '0' && *cursor <= '9') {
+        fd = fd * 10 + (uint64_t)(*cursor - '0');
+        if (fd > 1048576)
+            return;
+        cursor++;
+    }
+    if (cursor == value || *cursor != '\0')
+        return;
+
+    int flags = fcntl((int)fd, F_GETFL);
+    if (flags < 0)
+        return;
+
+    /* A non-blocking report fd keeps a full pipe from stalling the target.
+     * Honggfuzz already creates it this way; other users get the same
+     * guarantee here. Failure is harmless because writes are bounded. */
+    (void)fcntl((int)fd, F_SETFL, flags | O_NONBLOCK);
+
+    report_channel_fd = fd;
+}
+
+static void report_channel_write(const char *bytes, size_t size) {
+    uint64_t fd = report_channel_fd;
+    if (fd == REPORT_CHANNEL_FD_NONE)
+        return;
+    /* Records are smaller than PIPE_BUF, so a successful write is complete.
+     * Retry EINTR a bounded number of times and drop EAGAIN remainder. */
+    for (unsigned attempt = 0; size && attempt < 8; attempt++) {
+        ssize_t written = syscall(SYS_write, (int)fd, bytes, size);
+        if (written > 0) {
+            bytes += written;
+            size -= (size_t)written;
+            continue;
+        }
+        if (written < 0 && errno == EINTR)
+            continue;
+        return;
+    }
+}
+
+static void report_channel_gadget(int gadget_type, uint64_t gadget_addr) {
+    if (report_channel_fd == REPORT_CHANNEL_FD_NONE)
+        return;
+
+    char record[64];
+    size_t size = 0;
+    const char *prefix = "TPGADGET 1 ";
+    while (*prefix)
+        record[size++] = *prefix++;
+
+    int64_t value = gadget_type;
+    uint64_t magnitude;
+    if (value < 0) {
+        record[size++] = '-';
+        magnitude = (uint64_t)(-(value + 1)) + 1;
+    } else {
+        magnitude = (uint64_t)value;
+    }
+    char digits[20];
+    size_t count = 0;
+    do {
+        digits[count++] = (char)('0' + magnitude % 10);
+        magnitude /= 10;
+    } while (magnitude);
+    while (count)
+        record[size++] = digits[--count];
+
+    record[size++] = ' ';
+    record[size++] = '0';
+    record[size++] = 'x';
+    count = 0;
+    do {
+        digits[count++] = "0123456789abcdef"[gadget_addr & 0xf];
+        gadget_addr >>= 4;
+    } while (gadget_addr);
+    while (count)
+        record[size++] = digits[--count];
+    record[size++] = '\n';
+
+    report_channel_write(record, size);
+}
 
 static void report_write(const char *bytes, size_t size) {
     while (size) {
@@ -304,6 +405,8 @@ void report_gadget(const char * gadget_desc, int gadget_type, uint64_t gadget_ad
 
     simulation_statistics.total_bug++;
     simulation_statistics.bug_type[gadget_type]++;
+
+    report_channel_gadget(gadget_type, gadget_addr);
 
     report_text("[teapot], ");
     if (gadget_type < 0)

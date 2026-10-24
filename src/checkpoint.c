@@ -1,4 +1,5 @@
 #include "checkpoint.h"
+#include "report_internal.h"
 #include "fault_sites.h"
 #include "runtime_contract.h"
 #include "signal_handler.h"
@@ -607,6 +608,8 @@ void print_statistics() {
 static void libcheckpoint_prepare_runtime(int argc, char **argv) {
     if (libcheckpoint_runtime_initialized)
         return;
+
+    libcheckpoint_report_channel_init();
 
 #if defined(__x86_64__)
     initialize_x64_extended_state();
