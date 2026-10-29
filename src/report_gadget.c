@@ -101,8 +101,9 @@ void libcheckpoint_report_channel_init(void) {
 
     /* A non-blocking report fd keeps a full pipe from stalling the target.
      * Honggfuzz already creates it this way; other users get the same
-     * guarantee here. Failure is harmless because writes are bounded. */
-    (void)fcntl((int)fd, F_SETFL, flags | O_NONBLOCK);
+     * guarantee here. Disable the channel if that guarantee cannot be set. */
+    if (fcntl((int)fd, F_SETFL, flags | O_NONBLOCK) < 0)
+        return;
 
     report_channel_fd = fd;
 }
