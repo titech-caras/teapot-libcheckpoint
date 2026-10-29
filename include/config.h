@@ -49,7 +49,8 @@
 #if defined(__riscv_flen) || defined(__riscv_vector) || defined(__riscv_zfh) || \
     defined(__riscv_zfhmin) || defined(__riscv_zfa) || defined(__riscv_zfinx) || \
     defined(__riscv_zdinx) || defined(__riscv_zhinx) || defined(__riscv_zhinxmin) || \
-    defined(__riscv_zba) || defined(__riscv_zbb) || defined(__riscv_zbc) || defined(__riscv_zbs)
+    defined(__riscv_zba) || defined(__riscv_zbb) || defined(__riscv_zbc) || defined(__riscv_zbs) || \
+    defined(__riscv_zbkb) || defined(__riscv_zbkc) || defined(__riscv_zbkx)
 #error "lp64-pure requires the approved IMAC/Zicsr/Zifencei/Zicond ISA without FP, vector or B"
 #endif
 #if !defined(__riscv_mul) || !defined(__riscv_atomic) || !defined(__riscv_compressed) || \
