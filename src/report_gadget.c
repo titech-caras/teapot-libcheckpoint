@@ -111,7 +111,7 @@ void libcheckpoint_report_channel_init(void) {
 /* 1: complete, 0: permanent error, -1: would block (EAGAIN). *written reports
  * how much of this call's record reached the fd. Pipe records are atomic, but
  * a file or socket can accept only a prefix, so callers handle partial writes. */
-static int report_channel_write(const char *bytes, size_t size, size_t *written) {
+static int report_channel_write_impl(const char *bytes, size_t size, size_t *written) {
     uint64_t fd = report_channel_fd;
     size_t total = 0;
     *written = 0;
@@ -134,6 +134,13 @@ static int report_channel_write(const char *bytes, size_t size, size_t *written)
     }
     *written = total;
     return size == 0 ? 1 : -1;
+}
+
+static int report_channel_write(const char *bytes, size_t size, size_t *written) {
+    int saved_errno = errno;
+    int result = report_channel_write_impl(bytes, size, written);
+    errno = saved_errno;
+    return result;
 }
 
 static size_t report_channel_unsigned(char *out, uint64_t value) {
