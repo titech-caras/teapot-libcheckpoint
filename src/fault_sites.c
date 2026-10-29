@@ -1021,7 +1021,14 @@ static bool publish_site(size_t module, size_t site) {
     if (page != 4096) return false;
     uintptr_t first = pc & ~(page - 1);
     uintptr_t last = (pc + 5 + page - 1) & ~(page - 1);
-    if (last < pc || teapot_fault_x64_mprotect((void *)first, last - first, PROT_READ | PROT_WRITE)) return false;
+    if (last < pc) return false;
+    if (teapot_fault_x64_mprotect((void *)first, last - first, PROT_READ | PROT_WRITE)) {
+        /* A failed range mprotect may already have changed an earlier VMA.
+         * Restore the complete window before retaining the kernel fallback. */
+        if (teapot_fault_x64_mprotect((void *)first, last - first, PROT_READ | PROT_EXEC))
+            reject_sites("cannot restore executable protections after failed publication setup");
+        return false;
+    }
     unsigned char branch[5] = {0xe9};
     int32_t displacement = stub >= pc + 5 ? (int32_t)(stub - pc - 5) :
                            (int32_t)(0u - (uint32_t)(pc + 5 - stub));
