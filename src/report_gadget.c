@@ -4,6 +4,9 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <signal.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -42,39 +45,16 @@ static uint64_t report_channel_fd LIBCHECKPOINT_PROTECTED_SECTION = REPORT_CHANN
 /* Number of gadget records lost because the channel was momentarily full.
  * Reported as a TPDROP record before the next successful gadget write. */
 static uint64_t report_channel_dropped LIBCHECKPOINT_PROTECTED_SECTION;
-/* Set when a non-pipe fd accepted only part of a gadget record. The next
- * record is preceded by a newline so the two lines cannot merge. */
-static uint64_t report_channel_partial LIBCHECKPOINT_PROTECTED_SECTION;
-/* A TPDROP record may itself be written piecewise on a file or socket. Keep
- * it in static storage so a later call can finish the same line. */
-static char report_channel_drop_record[40] LIBCHECKPOINT_PROTECTED_SECTION_ALIGNED(8);
-static size_t report_channel_drop_size LIBCHECKPOINT_PROTECTED_SECTION;
-static size_t report_channel_drop_offset LIBCHECKPOINT_PROTECTED_SECTION;
-static uint64_t report_channel_drop_base LIBCHECKPOINT_PROTECTED_SECTION;
-/* A permanently broken partial TPDROP is closed with "~\n". These fields make
- * that marker itself resumable before the TPDROP is rebuilt. */
-static uint64_t report_channel_drop_marker LIBCHECKPOINT_PROTECTED_SECTION;
-static size_t report_channel_drop_marker_offset LIBCHECKPOINT_PROTECTED_SECTION;
+/* Both optional drop count and gadget fit in one atomic pipe write. */
+static char report_channel_record[128] LIBCHECKPOINT_PROTECTED_SECTION_ALIGNED(8);
+_Static_assert(sizeof(report_channel_record) < PIPE_BUF, "report must fit in a pipe write");
 LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_fd);
 LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_dropped);
-LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_partial);
-LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_drop_record);
-LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_drop_size);
-LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_drop_offset);
-LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_drop_base);
-LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_drop_marker);
-LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_drop_marker_offset);
+LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_record);
 
 void libcheckpoint_report_channel_init(void) {
     report_channel_fd = REPORT_CHANNEL_FD_NONE;
     report_channel_dropped = 0;
-    report_channel_partial = 0;
-    report_channel_drop_size = 0;
-    report_channel_drop_offset = 0;
-    report_channel_drop_base = 0;
-    report_channel_drop_marker = 0;
-    report_channel_drop_marker_offset = 0;
-
     const char *value = getenv(REPORT_CHANNEL_ENV);
     if (value == NULL || *value == '\0')
         return;
@@ -108,39 +88,30 @@ void libcheckpoint_report_channel_init(void) {
     report_channel_fd = fd;
 }
 
-/* 1: complete, 0: permanent error, -1: would block (EAGAIN). *written reports
- * how much of this call's record reached the fd. Pipe records are atomic, but
- * a file or socket can accept only a prefix, so callers handle partial writes. */
-static int report_channel_write_impl(const char *bytes, size_t size, size_t *written) {
-    uint64_t fd = report_channel_fd;
-    size_t total = 0;
-    *written = 0;
-    if (fd == REPORT_CHANNEL_FD_NONE)
-        return 0;
-    for (unsigned attempt = 0; size && attempt < 8; attempt++) {
-        ssize_t count = syscall(SYS_write, (int)fd, bytes, size);
-        if (count > 0) {
-            bytes += count;
-            size -= (size_t)count;
-            total += (size_t)count;
-            continue;
-        }
-        if (count < 0 && errno == EINTR)
-            continue;
-        *written = total;
-        if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
-            return -1;
-        return 0;
-    }
-    *written = total;
-    return size == 0 ? 1 : -1;
-}
-
-static int report_channel_write(const char *bytes, size_t size, size_t *written) {
+/* Linux uses a 64-bit kernel signal mask on every supported ISA. Raw
+ * syscalls avoid libc/ASan writing sigset_t on the poisoned scratch stack.
+ * Preserve an already pending SIGPIPE, and consume only one created by our
+ * failed write. The application's disposition is never changed. */
+static bool report_channel_write(const char *bytes, size_t size) {
     int saved_errno = errno;
-    int result = report_channel_write_impl(bytes, size, written);
+    uint64_t pipe_mask = UINT64_C(1) << (SIGPIPE - 1), previous, pending;
+    bool complete = false;
+    if (syscall(SYS_rt_sigprocmask, SIG_BLOCK, &pipe_mask, &previous,
+                sizeof(pipe_mask)) == 0) {
+        if (syscall(SYS_rt_sigpending, &pending, sizeof(pending)) == 0) {
+            ssize_t count = syscall(SYS_write, (int)report_channel_fd, bytes, size);
+            complete = count == (ssize_t)size;
+            if (count < 0 && errno == EPIPE && !(pending & pipe_mask)) {
+                const struct timespec zero = {0, 0};
+                /* EINTR can only come from an unrelated application signal. */
+                while (syscall(SYS_rt_sigtimedwait, &pipe_mask, NULL, &zero,
+                               sizeof(pipe_mask)) < 0 && errno == EINTR) {}
+            }
+        }
+        syscall(SYS_rt_sigprocmask, SIG_SETMASK, &previous, NULL, sizeof(previous));
+    }
     errno = saved_errno;
-    return result;
+    return complete;
 }
 
 static size_t report_channel_unsigned(char *out, uint64_t value) {
@@ -156,114 +127,19 @@ static size_t report_channel_unsigned(char *out, uint64_t value) {
     return size;
 }
 
-/* A bare newline would make a record cut inside a number look valid (for
- * example "0x1"). Append a marker that no record format accepts instead. */
-static bool report_channel_terminate_line(void) {
-    if (!report_channel_partial)
-        return true;
-    static const char marker[] = "~\n";
-    size_t written;
-    if (report_channel_write(marker, sizeof(marker) - 1, &written) != 1)
-        return false;
-    report_channel_partial = 0;
-    return true;
-}
-
-/* Finish a marker that closes an abandoned partial TPDROP. The marker is
- * resumable, so a failed write never lets the rebuilt TPDROP merge with the
- * unterminated fragment. */
-static bool report_channel_flush_drop_marker(void) {
-    if (!report_channel_drop_marker)
-        return true;
-    static const char marker[] = "~\n";
-    size_t written;
-    int result = report_channel_write(marker + report_channel_drop_marker_offset,
-                                      sizeof(marker) - 1 - report_channel_drop_marker_offset,
-                                      &written);
-    report_channel_drop_marker_offset += written;
-    if (result != 1)
-        return false;
-    report_channel_drop_marker = 0;
-    report_channel_drop_marker_offset = 0;
-    return true;
-}
-
-/* Finish the pending TPDROP record, resuming a partial write if needed.
- * Accepted limitation: a count still pending when the target exits (for
- * example after the final iteration) is never delivered. */
-static bool report_channel_flush_drops(void) {
-    if (report_channel_drop_marker) {
-        if (!report_channel_flush_drop_marker())
-            return false;
-        /* The old fragment is now invalidated; rebuild the whole TPDROP. */
-        report_channel_drop_size = 0;
-        report_channel_drop_offset = 0;
-        report_channel_drop_base = 0;
-    }
-
-    if (report_channel_drop_offset == 0 && report_channel_drop_size == 0) {
-        char *record = report_channel_drop_record;
-        size_t size = 0;
-        const char *prefix = "TPDROP 1 ";
-        while (*prefix)
-            record[size++] = *prefix++;
-        size += report_channel_unsigned(record + size, report_channel_dropped);
-        record[size++] = '\n';
-        report_channel_drop_size = size;
-        report_channel_drop_base = report_channel_dropped;
-    }
-
-    size_t written;
-    int result = report_channel_write(report_channel_drop_record + report_channel_drop_offset,
-                                      report_channel_drop_size - report_channel_drop_offset,
-                                      &written);
-    report_channel_drop_offset += written;
-    if (result != 1) {
-        /* A permanently broken partial TPDROP must not be followed by another
-         * record. Mark it invalid, but only discard the old record once the
-         * marker itself has been fully written. */
-        if (result == 0 && report_channel_drop_offset != 0) {
-            report_channel_drop_marker = 1;
-            report_channel_drop_marker_offset = 0;
-            if (report_channel_flush_drop_marker()) {
-                report_channel_drop_size = 0;
-                report_channel_drop_offset = 0;
-                report_channel_drop_base = 0;
-            }
-        }
-        return false;
-    }
-
-    /* Records dropped while this line was incomplete still need announcing. */
-    report_channel_dropped -= report_channel_drop_base;
-    report_channel_drop_base = 0;
-    report_channel_drop_size = 0;
-    report_channel_drop_offset = 0;
-    return true;
-}
-
 static void report_channel_gadget(int gadget_type, uint64_t gadget_addr) {
     if (report_channel_fd == REPORT_CHANNEL_FD_NONE)
         return;
 
-    /* A previous record may have been cut short on a non-pipe fd. */
-    if (!report_channel_terminate_line()) {
-        report_channel_dropped++;
-        return;
-    }
-
-    /* Announce records lost since the last successful write before sending a
-     * new one, so the reader can account for everything the channel held. */
-    if (report_channel_dropped) {
-        if (!report_channel_flush_drops()) {
-            /* Ordered before the gadget: this one is dropped as well. */
-            report_channel_dropped++;
-            return;
-        }
-    }
-
-    char record[64];
+    char *record = report_channel_record;
     size_t size = 0;
+    if (report_channel_dropped) {
+        const char *drop = "TPDROP 1 ";
+        while (*drop)
+            record[size++] = *drop++;
+        size += report_channel_unsigned(record + size, report_channel_dropped);
+        record[size++] = '\n';
+    }
     const char *prefix = "TPGADGET 1 ";
     while (*prefix)
         record[size++] = *prefix++;
@@ -291,13 +167,11 @@ static void report_channel_gadget(int gadget_type, uint64_t gadget_addr) {
         record[size++] = digits[--count];
     record[size++] = '\n';
 
-    size_t written;
-    int result = report_channel_write(record, size, &written);
-    if (result != 1) {
-        if (written != 0)
-            report_channel_partial = 1;
+    if (report_channel_write(record, size))
+        report_channel_dropped = 0;
+    else
         report_channel_dropped++;
-    }
+
 }
 
 static void report_write(const char *bytes, size_t size) {
