@@ -163,6 +163,17 @@ depth-one state, not a live outer checkpoint chain. Recovery code remains
 unguarded, so this is not validation of a BTI target-identification backend.
 Cross-compiled tests need a suitable `CMAKE_CROSSCOMPILING_EMULATOR` launcher,
 including the address-space reservation required by QEMU.
+Teapot owns SIGSEGV, SIGILL, SIGFPE and SIGBUS while enabled; the experimental
+AArch64 BTI build also owns SIGTRAP.
+Rewritten calls to `sigaction`, `signal`, the BSD aliases `bsd_signal` and
+`ssignal`, the SysV aliases `sysv_signal` and `__sysv_signal`, and `sigset`
+update the application's saved action for these signals. BSD-style installers
+use `SA_RESTART`; changes made through `siginterrupt` are not modeled.
+For owned signals, `sigset(sig, SIG_IGN)` still leaves the runtime handler
+installed without `SA_RESTART`, so delivery may interrupt a blocking syscall
+with `EINTR` even though the application action is ignore. Direct `sigaction`
+calls from libc, ASan or an unrewritten DSO can replace Teapot's handler. Other
+signals retain libc behavior.
 The single-threaded runtime reserves a guarded alternate signal stack with the
 kernel-reported signal-frame minimum plus 64 KiB of handler space (at least
 `SIGSTKSZ` is reserved for the frame on older kernels). This avoids overflowing
