@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <pthread.h>
 #include <signal.h>
 #include <time.h>
 #include <stdlib.h>
@@ -52,6 +53,16 @@ LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_fd);
 LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_dropped);
 LIBCHECKPOINT_ASSERT_PROTECTED(report_channel_record);
 
+/* Only the process launched with the channel owns it. Fork children retain
+ * ordinary stderr reporting, without the parent's fd or accumulated losses. */
+static void report_channel_after_fork(void) {
+    if (report_channel_fd != REPORT_CHANNEL_FD_NONE)
+        close((int)report_channel_fd);
+    report_channel_fd = REPORT_CHANNEL_FD_NONE;
+    report_channel_dropped = 0;
+    unsetenv(REPORT_CHANNEL_ENV);
+}
+
 void libcheckpoint_report_channel_init(void) {
     report_channel_fd = REPORT_CHANNEL_FD_NONE;
     report_channel_dropped = 0;
@@ -85,6 +96,12 @@ void libcheckpoint_report_channel_init(void) {
     if (fcntl((int)fd, F_SETFL, flags | O_NONBLOCK) < 0)
         return;
 
+    int descriptor_flags = fcntl((int)fd, F_GETFD);
+    if (descriptor_flags < 0 ||
+            fcntl((int)fd, F_SETFD, descriptor_flags | FD_CLOEXEC) < 0)
+        return;
+    if (pthread_atfork(NULL, NULL, report_channel_after_fork) != 0)
+        return;
     report_channel_fd = fd;
 }
 

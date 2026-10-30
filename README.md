@@ -174,6 +174,9 @@ Report-suppression tests cover page boundaries and permission failures, includin
 simulated 64 KiB pages. Suppression uses the runtime page size and `/proc/self/maps`
 to restore the affected pages' original read/write/execute permissions. Failure to
 restore those permissions terminates the process.
+The optional `HF_TEAPOT_REPORT_FD` channel attributes gadgets only to the launched
+process; fork children report to stderr, close the channel and remove its environment
+setting, and the channel descriptor is closed on exec.
 Reporting uses bounded protected storage and syscall I/O, without heap-backed
 streams or libc formatting. ASan's `snprintf` interceptor rejects poisoned output
 buffers. Tests cover the full report format, poisoned storage, partial/interrupted
