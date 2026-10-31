@@ -124,8 +124,8 @@ builds a read-only registry before application constructors. Only registered
 SIGSEGV MAPERR/ACCERR data-access PCs in an active checkpoint, outside memory
 replay, train. Copy PCs are indexed separately, sorted and read-only; an exact
 copy fault is still transient. Special MTE/BTI/PAC and user-sent faults are not
-counted. The final ELF validator checks one branch-sized data instruction,
-copy equivalence, non-overlap, reach and alignment. PC/SP/FP-relative and
+counted. Sites require one branch-sized data instruction, copy equivalence,
+non-overlap, reach and alignment. PC/SP/FP-relative and
 segmented accesses are not covered by this format.
 
 `TEAPOT_FAULT_ADAPTATION=0` disables training at start-up (unknown values also
@@ -137,9 +137,8 @@ Module metadata must remain loaded for the process lifetime.
 
 Links carrying tables require `-Wl,-z,separate-code`, so readonly tables are
 not mapped executable. Training-enabled CMake targets export this option;
-direct archive users must pass it. Validate each final ELF with Teapot's
-`tools/validate_fault_sites.py`; the component validator performs this check
-automatically.
+direct archive users must pass it. Runtime startup validates registered site
+metadata before enabling training; no standalone final-ELF validator is provided.
 
 ### Software-mode layout
 

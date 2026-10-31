@@ -333,8 +333,8 @@ bool teapot_fault_validate_table(const struct teapot_fault_site_table *t, size_t
         counters_end - counters != storage || pending_end - pending != storage ||
         !(counters_end <= pending || pending_end <= counters))
         return false;
-    /* Publishing may temporarily remove X from this range. The emitter and
-     * final-link validator isolate it from ordinary/runtime .text pages. */
+    /* Publishing may temporarily remove X from this range. The emitter/linker
+     * must isolate it from ordinary/runtime .text pages. */
     if (windows(t) && ((text_start | text_end) & (risc_windows(t) ? TEAPOT_FAULT_RISC_ISOLATION - 1 : 4095)))
         return false;
     if (risc_windows(t) && (counters_end != pending || stub_start != text_start || stub_end != text_end)) return false;
@@ -633,7 +633,7 @@ static const uint32_t *initialize_copies(const struct teapot_fault_site_table *t
         const struct teapot_fault_site_entry *e = entry(t, i);
         RESOLVE(e, fault_pc, original); RESOLVE(e, copy_pc, copy);
         /* Mapping and extent checks precede these reads. PC-relative accesses
-         * are unsupported by the emitter/final validator: copies are exact. */
+         * are unsupported by the emitter: copies must be exact. */
         if (original_overlap(t, copy, e->length))
             reject_sites("copy differs from or overlaps an original access");
         if (x64_windows(t)) {

@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -84,6 +85,12 @@ void libcheckpoint_report_channel_init(void) {
     /* Never take over a standard stream: doing so would change the target's
      * normal output and is never what a channel user intended. */
     if (fd <= STDERR_FILENO)
+        return;
+
+    /* Atomic bounded records require a pipe; reject other fd types before
+     * changing their flags or registering fork ownership. */
+    struct stat descriptor;
+    if (fstat((int)fd, &descriptor) < 0 || !S_ISFIFO(descriptor.st_mode))
         return;
 
     int flags = fcntl((int)fd, F_GETFL);

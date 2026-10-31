@@ -25,8 +25,7 @@
  * .preinit_array entries of objects linked before the runtime (on RISC-V the
  * C library's load_gp, rewritten with the program) and after IFUNC resolvers.
  * It cannot tell how many modules a program has: a module without any record
- * linked next to one with a record is not noticed here (validate_link.py
- * counts the records of a component link).
+ * linked next to one with a record is not noticed here.
  *
  * Every ABI fact both sides use is compared for equality, including slots of
  * the AArch64 shadow stack and runtime-internal report regions that only need

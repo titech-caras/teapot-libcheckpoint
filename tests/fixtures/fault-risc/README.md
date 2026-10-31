@@ -12,14 +12,9 @@ The retained reviewed l6 outputs had these SHA-256 identities:
 - AArch64: `6b0f7ab46f90e9950674a3795f737a55df54950333feda39f556771e7c1c45de`
 - RV64: `8b5021c168487283bce94c2abbc1860abb37be08ea80fadc95474117af1240db`
 
-Teapot's `tests/test_fault_risc_integration.py` recreates their GTIRB inputs,
-runs the actual emitter and printer/preparation, and assembles both sources
-after canonicalizing only generated UUIDs. It compares section bytes, sizes,
-alignment and flags, every retained symbol's position/binding/type/visibility,
-and relocation offsets/types/addends/targets. Only symbol-table ordering and
-the assembly file name are ignored: the printer can reorder co-located aliases.
-An encoder/emitter change must update the fixture intentionally and pass both
-Python and runtime tests. Cross compilers are required for this Python gate.
+These are retained fixtures, not an automatically regenerated mirror of the
+current emitter/printer. An encoder/emitter change must update them
+intentionally and pass the runtime tests.
 
 CMake builds these checked-in files without requiring Teapot or a printer at
 runtime-library build time. Publishing-enabled RISC CTest lanes run execution
