@@ -1,12 +1,12 @@
 // LLVM DFSan's custom libc wrappers (third_party/llvm-dfsan, unmodified) over
 // Teapot's shadow, in one translation unit: the upstream wrappers, the DFSan
 // runtime services they call, and the bridges Teapot redirects calls to. The
-// build keeps only the bridges global (cmake/DiftWrappers.cmake), so nothing
+// build keeps only the bridges global (cmake/DfsanWrappers.cmake), so nothing
 // here can bind to a sanitizer runtime linked into the same program.
 //
-// Built with -funsigned-char: upstream compares and subtracts plain char in
-// memcmp, strcmp, strcasecmp and strchr, which gives libc's results only when
-// char is unsigned, as it already is on AArch64 and RISC-V.
+// Built with -funsigned-char: upstream's comparison and search loops use plain
+// char, which agrees with libc's bytes only when char is unsigned, as it
+// already is on AArch64 and RISC-V.
 
 // Keep libc's memcpy/memmove/memset; upstream would otherwise alias them to
 // the sanitizer's own copies. Keep ISO C strto*: C++ implies _GNU_SOURCE,
@@ -158,31 +158,46 @@ DFSW_BRIDGE3(void *, memmove, void *, const void *, size_t)
 DFSW_BRIDGE3(void *, memset, void *, int, size_t)
 DFSW_BRIDGE2(char *, strcpy, char *, const char *)
 DFSW_BRIDGE2(char *, strcat, char *, const char *)
-DFSW_BRIDGE3(char *, strncat, char *, const char *, size_t)
 DFSW_BRIDGE1(char *, strdup, const char *)
 DFSW_BRIDGE1(size_t, strlen, const char *)
 DFSW_BRIDGE2(char *, strrchr, char *, int)
 DFSW_BRIDGE2(char *, strpbrk, const char *, const char *)
 DFSW_BRIDGE2(char *, strstr, char *, char *)
 DFSW_BRIDGE3(void *, memchr, void *, int, size_t)
-DFSW_BRIDGE3(int, memcmp, const void *, const void *, size_t)
-DFSW_BRIDGE3(int, bcmp, const void *, const void *, size_t)
-DFSW_BRIDGE2(int, strcmp, const char *, const char *)
-DFSW_BRIDGE3(int, strncmp, const char *, const char *, size_t)
-DFSW_BRIDGE2(int, strcasecmp, const char *, const char *)
-DFSW_BRIDGE3(int, strncasecmp, const char *, const char *, size_t)
 DFSW_BRIDGE3(long, strtol, const char *, char **, int)
 DFSW_BRIDGE3(long long, strtoll, const char *, char **, int)
 DFSW_BRIDGE3(unsigned long, strtoul, const char *, char **, int)
 DFSW_BRIDGE3(unsigned long long, strtoull, const char *, char **, int)
 DFSW_BRIDGE3(int, inet_pton, int, const char *, void *)
 
+// Upstream computes these results itself. Take them from libc instead, so
+// ASan's checks and a fuzzer's comparison hooks still see each call, and use
+// upstream's wrapper for the label alone.
+#define DFSW_LABEL_ONLY(ret_t, name, params, args, labels)                     \
+  extern "C" ret_t name##__dift_wrapper__ params {                             \
+    ret_t ret = (ret_t)name args;                                              \
+    dfsan_label ret_label = 0;                                                 \
+    __dfsw_##name labels;                                                      \
+    dift_reg_tags[DIFT_RET] = ret_label;                                       \
+    return ret;                                                                \
+  }
+#define DFSW_COMPARE2(name)                                                    \
+  DFSW_LABEL_ONLY(int, name, (const char *a0, const char *a1), (a0, a1),       \
+                  (a0, a1, DFSW_LABEL(0), DFSW_LABEL(1), &ret_label))
+#define DFSW_COMPARE3(name, t)                                                 \
+  DFSW_LABEL_ONLY(int, name, (t a0, t a1, size_t a2), (a0, a1, a2),            \
+                  (a0, a1, a2, DFSW_LABEL(0), DFSW_LABEL(1), DFSW_LABEL(2),    \
+                   &ret_label))
+DFSW_COMPARE3(memcmp, const void *)
+DFSW_COMPARE3(bcmp, const void *)
+DFSW_COMPARE2(strcmp)
+DFSW_COMPARE3(strncmp, const char *)
+DFSW_COMPARE2(strcasecmp)
+DFSW_COMPARE3(strncasecmp, const char *)
 // Upstream's search loop compares s[i] with c itself; libc compares with
-// (char)c. With unsigned char, passing (unsigned char)c makes them agree.
-extern "C" char *strchr__dift_wrapper__(const char *s, int c) {
-  DFSW_RETURN(char *, __dfsw_strchr(s, (unsigned char)c, DFSW_LABEL(0),
-                                    DFSW_LABEL(1), &ret_label));
-}
+// (char)c. With unsigned char, passing (unsigned char)c gives the same bytes.
+DFSW_LABEL_ONLY(char *, strchr, (const char *a0, int a1), (a0, a1),
+                (a0, (unsigned char)a1, DFSW_LABEL(0), DFSW_LABEL(1), &ret_label))
 
 // Not in DFSan's list. glibc's atoi is (int)strtol(nptr, NULL, 10).
 extern "C" int atoi__dift_wrapper__(const char *nptr) {

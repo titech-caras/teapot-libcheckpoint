@@ -200,8 +200,22 @@ void map_dift_pages() {
     __atomic_store_n(&teapot_shadow_mapping_ready, TEAPOT_SHADOW_MAPPING_ENFORCEMENT, __ATOMIC_RELEASE);
 }
 
+// Clearing at least this much drops the whole shadow pages instead of writing
+// them, as DFSan does for large allocations: an untouched page then costs no
+// time and no memory, and reads back as zero.
+#define DIFT_CLEAR_BY_RELEASE_SIZE (64 * 1024)
+
 __attribute__((noinline)) void dift_set_mem_tags(void *addr, dift_tag_t tag, size_t len) {
     volatile dift_tag_t *tags = DIFT_MEM_ADDR(addr);
+    if (tag == 0 && len >= DIFT_CLEAR_BY_RELEASE_SIZE) {
+        uintptr_t start = (uintptr_t)tags, end = start + len;
+        uintptr_t first = page_up(start), last = page_down(end);
+        if (madvise((void *)first, last - first, MADV_DONTNEED) == 0) {
+            for (uintptr_t byte = start; byte < first; byte++) *(volatile dift_tag_t *)byte = 0;
+            for (uintptr_t byte = last; byte < end; byte++) *(volatile dift_tag_t *)byte = 0;
+            return;
+        }
+    }
     for (size_t i = 0; i < len; i++) {
         tags[i] = tag;
     }

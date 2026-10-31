@@ -20,7 +20,6 @@ extern void *memmove__dift_wrapper__(void *, const void *, size_t);
 extern void *memset__dift_wrapper__(void *, int, size_t);
 extern char *strcpy__dift_wrapper__(char *, const char *);
 extern char *strcat__dift_wrapper__(char *, const char *);
-extern char *strncat__dift_wrapper__(char *, const char *, size_t);
 extern char *strdup__dift_wrapper__(const char *);
 extern size_t strlen__dift_wrapper__(const char *);
 extern char *strchr__dift_wrapper__(const char *, int);
@@ -74,8 +73,6 @@ static void set_tags(const void *address, const dift_tag_t *tags, size_t size) {
     memcpy(DIFT_MEM_ADDR(address), tags, size);
 }
 
-static int sign(int value) { return (value > 0) - (value < 0); }
-
 static void results(void) {
     static const char *const pairs[][2] = {
         {"\x80", "\x01"}, {"\x01", "\x80"}, {"abc", "abd"}, {"abc", "abc"},
@@ -85,13 +82,14 @@ static void results(void) {
         char *a = put(0, pairs[i][0], strlen(pairs[i][0]) + 1, 0);
         char *b = put(64, pairs[i][1], strlen(pairs[i][1]) + 1, 0);
         size_t n = strlen(a) < strlen(b) ? strlen(a) + 1 : strlen(b) + 1;
-        assert(sign(memcmp__dift_wrapper__(a, b, n)) == sign(memcmp(a, b, n)));
-        assert((bcmp__dift_wrapper__(a, b, n) == 0) == (bcmp(a, b, n) == 0));
-        assert(sign(strcmp__dift_wrapper__(a, b)) == sign(strcmp(a, b)));
-        assert(sign(strcasecmp__dift_wrapper__(a, b)) == sign(strcasecmp(a, b)));
+        // The comparison results are libc's own.
+        assert(memcmp__dift_wrapper__(a, b, n) == memcmp(a, b, n));
+        assert(bcmp__dift_wrapper__(a, b, n) == bcmp(a, b, n));
+        assert(strcmp__dift_wrapper__(a, b) == strcmp(a, b));
+        assert(strcasecmp__dift_wrapper__(a, b) == strcasecmp(a, b));
         for (size_t limit = 0; limit <= 4; limit++) {
-            assert(sign(strncmp__dift_wrapper__(a, b, limit)) == sign(strncmp(a, b, limit)));
-            assert(sign(strncasecmp__dift_wrapper__(a, b, limit)) == sign(strncasecmp(a, b, limit)));
+            assert(strncmp__dift_wrapper__(a, b, limit) == strncmp(a, b, limit));
+            assert(strncasecmp__dift_wrapper__(a, b, limit) == strncasecmp(a, b, limit));
         }
     }
 

@@ -21,6 +21,7 @@ extern void *calloc__dift_wrapper__(size_t, size_t);
 extern void *realloc__dift_wrapper__(void *, size_t);
 extern void *__memcpy_chk__dift_wrapper__(void *, const void *, size_t, size_t);
 extern void *__memset_chk__dift_wrapper__(void *, int, size_t, size_t);
+extern char *strncat__dift_wrapper__(char *, const char *, size_t);
 extern char *__strncat_chk__dift_wrapper__(char *, const char *, size_t, size_t);
 extern char *strncpy__dift_wrapper__(char *, const char *, size_t);
 extern size_t fread__dift_wrapper__(void *, size_t, size_t, FILE *);
@@ -90,14 +91,15 @@ static void allocations(void) {
     assert(result == NULL && effect.count == 0);
     result = calloc__dift_wrapper__(3, 7);
     assert(result != NULL && effect.count == 1 && dift_reg_tags[DIFT_RET] == 0);
-    assert(effect.dest == result && effect.length == 21 && effect.tag == 0);
+    assert(effect.dest == result && effect.length == malloc_usable_size(result) && effect.tag == 0);
     for (size_t i = 0; i < 21; i++) assert(((unsigned char *)result)[i] == 0);
     free(result);
 
     reset();
     result = malloc__dift_wrapper__(21);
     assert(result != NULL && effect.count == 1 && dift_reg_tags[DIFT_RET] == 0);
-    assert(effect.dest == result && effect.length == 21 && effect.tag == 0);
+    // The whole usable block, so slack never keeps an earlier block's tags.
+    assert(effect.dest == result && effect.length == malloc_usable_size(result) && effect.tag == 0);
 
     // A grown block keeps the old contents' tags and clears the rest.
     memset(result, 7, 21);
@@ -106,7 +108,8 @@ static void allocations(void) {
     void *grown = realloc__dift_wrapper__(result, 4096);
     assert(grown != NULL && dift_reg_tags[DIFT_RET] == 0);
     for (size_t i = 0; i < 21; i++) assert(((unsigned char *)grown)[i] == 7);
-    assert(effect.dest == (char *)grown + kept && effect.length == 4096 - kept && effect.tag == 0);
+    assert(effect.dest == (char *)grown + kept && effect.tag == 0);
+    assert(effect.length == malloc_usable_size(grown) - kept);
     assert(effect.count == (grown == result ? 1 : 2));
     free(grown);
 }
@@ -132,14 +135,17 @@ static void strings(void) {
     for (unsigned i = 0; i < 4; i++) DIFT_MEM_TAG(src + i) = i + 1;
 
     for (size_t limit = 0; limit <= 5; limit++) {
-        strcpy(dest, "prefix-");
-        memset(DIFT_MEM_ADDR(dest), 0x40, 24);
         size_t copied = limit < 3 ? limit : 3;
-        assert(__strncat_chk__dift_wrapper__(dest, src, limit, 24) == dest);
-        assert(strlen(dest) == 7 + copied && memcmp(dest + 7, src, copied) == 0);
-        for (size_t i = 0; i < copied; i++) assert(DIFT_MEM_TAG(dest + 7 + i) == i + 1);
-        assert(DIFT_MEM_TAG(dest + 7 + copied) == (copied < limit ? 4 : 0));
-        assert(DIFT_MEM_TAG(dest + 6) == 0x40 && DIFT_MEM_TAG(dest + 8 + copied) == 0x40);
+        for (unsigned checked = 0; checked < 2; checked++) {
+            strcpy(dest, "prefix-");
+            memset(DIFT_MEM_ADDR(dest), 0x40, 24);
+            char *result = checked ? __strncat_chk__dift_wrapper__(dest, src, limit, 24)
+                                   : strncat__dift_wrapper__(dest, src, limit);
+            assert(result == dest && strlen(dest) == 7 + copied && memcmp(dest + 7, src, copied) == 0);
+            for (size_t i = 0; i < copied; i++) assert(DIFT_MEM_TAG(dest + 7 + i) == i + 1);
+            assert(DIFT_MEM_TAG(dest + 7 + copied) == (copied < limit ? 4 : 0));
+            assert(DIFT_MEM_TAG(dest + 6) == 0x40 && DIFT_MEM_TAG(dest + 8 + copied) == 0x40);
+        }
     }
     memset(DIFT_MEM_ADDR(dest), 0x40, 24);
     assert(strncpy__dift_wrapper__(dest, src, 8) == dest);
@@ -150,6 +156,10 @@ static void strings(void) {
     char *edge = (char *)arena + arena_size - 4;
     memcpy(edge, "wxyz", 4);
     assert(strncpy__dift_wrapper__(dest, edge, 4) == dest && memcmp(dest, "wxyz", 4) == 0);
+    strcpy(dest, "ab");
+    assert(strncat__dift_wrapper__(dest, edge, 4) == dest && strcmp(dest, "abwxyz") == 0);
+    strcpy(dest, "ab");
+    assert(__strncat_chk__dift_wrapper__(dest, edge, 4, 24) == dest && strcmp(dest, "abwxyz") == 0);
 }
 
 struct input_source {
@@ -219,7 +229,7 @@ static void block_input(void) {
                         errno = 0;
                         size_t actual = unlocked ? fread_unlocked__dift_wrapper__(arena, sizes[size], count, stream)
                                                  : fread__dift_wrapper__(arena, sizes[size], count, stream);
-                        assert(actual == result && errno == saved_errno);
+                        assert(actual == result && errno == saved_errno && dift_reg_tags[DIFT_RET] == 0);
                         assert(feof(stream) == eof && ferror(stream) == error);
                         assert(fclose(stream) == 0);
                         assert(memcmp(arena, expected, sizeof(expected)) == 0);

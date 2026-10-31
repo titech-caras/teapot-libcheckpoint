@@ -253,6 +253,12 @@ if(BUILD_TESTING)
         endif()
     endforeach()
 
+    # The wrapper tests' layout: a fixed arena whose shadow is mappable natively and under QEMU.
+    add_executable(checkpoint_dift_clear_test tests/dift_clear.c src/dift_support.c src/shadow_mapping.c)
+    target_include_directories(checkpoint_dift_clear_test PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/include" include)
+    target_compile_definitions(checkpoint_dift_clear_test PRIVATE DIFT_XOR_MASK=0x70000000ULL)
+    add_test(NAME checkpoint_dift_clear COMMAND checkpoint_dift_clear_test)
+
     add_executable(checkpoint_dift_mapping_test tests/dift_mapping.c src/shadow_mapping.c)
     teapot_configure_checkpoint_target(checkpoint_dift_mapping_test)
     add_test(NAME checkpoint_dift_mapping COMMAND checkpoint_dift_mapping_test)
