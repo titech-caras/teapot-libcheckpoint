@@ -8,19 +8,12 @@ function(teapot_configure_dift_wrapper_target target)
         DIFT_XOR_MASK=${DIFT_XOR_MASK}
         ${DIFT_RANGE_DEFS})
     if(TEAPOT_RISCV_PROFILE STREQUAL "lp64-pure")
-        # Math/zlib wrappers must obey the same real compiler ABI/ISA check.
+        # zlib wrappers must obey the same real compiler ABI/ISA check.
         target_compile_definitions(${target} PRIVATE TEAPOT_RISCV_LP64_PURE)
         target_compile_options(${target} PRIVATE
             -include "${CMAKE_CURRENT_SOURCE_DIR}/include/config.h")
     endif()
 endfunction()
-
-if(TEAPOT_BUILD_DIFT_MATH_WRAPPERS)
-    add_library(checkpoint_dift_math_wrappers src/dift_wrappers/dift_math_wrappers.c)
-    teapot_configure_dift_wrapper_target(checkpoint_dift_math_wrappers)
-    target_link_libraries(checkpoint_dift_math_wrappers PUBLIC m)
-    install(TARGETS checkpoint_dift_math_wrappers ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
-endif()
 
 if(TEAPOT_BUILD_DIFT_ZLIB_WRAPPERS)
     find_package(ZLIB 1.2.6 REQUIRED)

@@ -6,7 +6,8 @@ include(CTest)
 
 # Require declarations in every C archive and fixture, including on compilers
 # older than GCC 14 which otherwise only warn before deleting unreachable calls.
-add_compile_options("$<$<COMPILE_LANGUAGE:C>:-Werror=implicit-function-declaration>")
+# (The DFSan wrapper unit is C++ built by the C compiler: DfsanWrappers.cmake.)
+add_compile_options("$<$<AND:$<COMPILE_LANGUAGE:C>,$<NOT:$<BOOL:$<TARGET_PROPERTY:TEAPOT_COMPILE_AS_CXX>>>>:-Werror=implicit-function-declaration>")
 
 include(GNUInstallDirs)
 include(cmake/Options.cmake)
@@ -15,6 +16,7 @@ include(cmake/DiftLayout.cmake)
 include(cmake/AArch64ShadowStack.cmake)
 include(cmake/RuntimeTargets.cmake)
 include(cmake/DiftWrappers.cmake)
+include(cmake/DfsanWrappers.cmake)
 
 if(BUILD_TESTING)
     add_executable(checkpoint_signal_installers_test tests/signal_installers.c)
@@ -37,8 +39,7 @@ if(BUILD_TESTING)
     if(NOT CMAKE_NM)
         message(FATAL_ERROR "CMAKE_NM is required for runtime export coverage")
     endif()
-    foreach(archive IN ITEMS checkpoint checkpoint_nested
-                             checkpoint_dift_math_wrappers checkpoint_dift_zlib_wrappers)
+    foreach(archive IN ITEMS checkpoint checkpoint_nested checkpoint_dift_zlib_wrappers)
         if(TARGET ${archive})
             add_test(NAME ${archive}_reserved_exports
                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/runtime_exports.py"
@@ -136,8 +137,7 @@ if(BUILD_TESTING)
     add_test(NAME checkpoint_optional_zlib_required
         COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/optional_zlib_required.cmake")
     if(CMAKE_NM)
-        foreach(archive IN ITEMS checkpoint checkpoint_nested
-                                 checkpoint_dift_math_wrappers checkpoint_dift_zlib_wrappers)
+        foreach(archive IN ITEMS checkpoint checkpoint_nested checkpoint_dift_zlib_wrappers)
             if(NOT TARGET ${archive})
                 continue()
             endif()
@@ -352,10 +352,25 @@ if(BUILD_TESTING)
     target_include_directories(checkpoint_dift_wrappers_test PRIVATE
         "${CMAKE_CURRENT_BINARY_DIR}/include" include)
     target_compile_definitions(checkpoint_dift_wrappers_test PRIVATE DIFT_XOR_MASK=0x70000000ULL)
-    target_link_options(checkpoint_dift_wrappers_test PRIVATE -Wl,--wrap=strdup)
-    foreach(check IN ITEMS allocations memory strings addresses block-input line-input fortified-failure)
+    foreach(check IN ITEMS allocations memory strings block-input line-input fortified-failure)
         add_test(NAME checkpoint_dift_wrappers_${check}
             COMMAND checkpoint_dift_wrappers_test ${check})
+    endforeach()
+
+    teapot_dfsan_wrapper_object(checkpoint_dfsan_wrappers_test_objects)
+    target_include_directories(checkpoint_dfsan_wrappers_test_objects PRIVATE
+        "${CMAKE_CURRENT_BINARY_DIR}/include" include)
+    target_compile_definitions(checkpoint_dfsan_wrappers_test_objects PRIVATE DIFT_XOR_MASK=0x70000000ULL)
+    add_executable(checkpoint_dfsan_wrappers_test tests/dfsan_wrappers.c
+        "${CMAKE_CURRENT_BINARY_DIR}/checkpoint_dfsan_wrappers_test_objects.o")
+    target_include_directories(checkpoint_dfsan_wrappers_test PRIVATE
+        "${CMAKE_CURRENT_BINARY_DIR}/include" include)
+    target_compile_definitions(checkpoint_dfsan_wrappers_test PRIVATE DIFT_XOR_MASK=0x70000000ULL)
+    # ISO C strto* references: C23 (GCC 15's default) selects glibc's __isoc23_*.
+    set_target_properties(checkpoint_dfsan_wrappers_test PROPERTIES C_STANDARD 17)
+    foreach(check IN ITEMS results labels)
+        add_test(NAME checkpoint_dfsan_wrappers_${check}
+            COMMAND checkpoint_dfsan_wrappers_test ${check})
     endforeach()
 
     add_executable(checkpoint_report_pages_test

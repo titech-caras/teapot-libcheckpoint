@@ -1,12 +1,11 @@
 #include "dift_support.h"
 
 #include <errno.h>
+#include <malloc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-#include <arpa/inet.h>
 
 extern void *__memcpy_chk(void *dest, const void *src, size_t count, size_t destlen);
 extern void *__memset_chk(void *dest, int ch, size_t count, size_t destlen);
@@ -19,7 +18,9 @@ extern char *__strncat_chk(char *dest, const char *src, size_t count, size_t des
 #endif
 extern size_t _IO_getline(FILE *stream, char *buffer, size_t size, int delimiter, int extract);
 
-// TODO: eventually move this into an independent project and make the interface compatible with dfsan
+// Teapot's own wrappers: the taint sources, the allocator and the fortified
+// copies. LLVM DFSan's wrappers (dfsan_wrappers.cpp) cover the other libc
+// calls Teapot redirects; teapot/configs/dfsan/ lists which calls go where.
 
 // Taint source: read.
 DIFT_WRAPPER(read, ssize_t, int fd, void *buf, size_t count) {
@@ -99,73 +100,41 @@ DIFT_WRAPPER(getchar, int) {
     return getchar();
 }
 
+// DFSan's own allocator clears the shadow of new memory and moves it on
+// realloc. Here the program uses libc's allocator, so these wrappers do it.
+DIFT_WRAPPER(malloc, void *, size_t size) {
+    void *addr = malloc(size);
+    if (addr != NULL)
+        dift_set_mem_tags(addr, 0, size);
+    dift_reg_tags[DIFT_RET] = 0;
+    return addr;
+}
+
 DIFT_WRAPPER(calloc, void*, size_t num, size_t size) {
     void *addr = calloc(num, size);
     if (addr != NULL)
         dift_set_mem_tags(addr, 0, num * size);
+    dift_reg_tags[DIFT_RET] = 0;
     return addr;
 }
 
-DIFT_WRAPPER(atoi, int, const char *str) {
-    dift_reg_tags[DIFT_RET] = DIFT_MEM_TAG(str);
-    return atoi(str);
+DIFT_WRAPPER(realloc, void *, void *old, size_t size) {
+    size_t old_size = old != NULL ? malloc_usable_size(old) : 0;
+    void *addr = realloc(old, size);
+    if (addr != NULL) {
+        size_t kept = old_size < size ? old_size : size;
+        if (addr != old)
+            dift_move_mem_tags(addr, old, kept);
+        dift_set_mem_tags((char *)addr + kept, 0, size - kept);
+    }
+    dift_reg_tags[DIFT_RET] = 0;
+    return addr;
 }
 
-DIFT_WRAPPER(strtol, long int, const char *nptr, char **endptr, int base) {
-    dift_reg_tags[DIFT_RET] = DIFT_MEM_TAG(nptr);
-    return strtol(nptr, endptr, base);
-}
-
-DIFT_WRAPPER(strtoul, unsigned long int, const char *nptr, char **endptr, int base) {
-    dift_reg_tags[DIFT_RET] = DIFT_MEM_TAG(nptr);
-    return strtoul(nptr, endptr, base);
-}
-
-
-DIFT_WRAPPER(strlen, size_t, const char *str) {
-    dift_reg_tags[DIFT_RET] = DIFT_MEM_TAG(str);
-    return strlen(str);
-}
-
-DIFT_WRAPPER(strdup, char*, const char *string) {
-    char *result = strdup(string);
-    if (result != NULL)
-        dift_copy_mem_tags(result, string, strlen(string) + 1);
-    return result;
-}
-
-DIFT_WRAPPER(memcpy, void*, void *dest, const void *src, size_t count) {
-    void *result = memcpy(dest, src, count);
-    dift_copy_mem_tags(dest, src, count);
-    dift_reg_tags[DIFT_RET] = dift_reg_tags[DIFT_ARG0];
-    return result;
-}
-
+// DFSan has no wrappers for the fortified _chk copies.
 DIFT_WRAPPER(__memcpy_chk, void*, void *dest, const void *src, size_t count, size_t destlen) {
     void *result = __memcpy_chk(dest, src, count, destlen);
     dift_copy_mem_tags(dest, src, count);
-    dift_reg_tags[DIFT_RET] = dift_reg_tags[DIFT_ARG0];
-    return result;
-}
-
-DIFT_WRAPPER(memmove, void*, void *dest, const void *src, size_t count) {
-    void *result = memmove(dest, src, count);
-    dift_move_mem_tags(dest, src, count);
-    dift_reg_tags[DIFT_RET] = dift_reg_tags[DIFT_ARG0];
-    return result;
-}
-
-DIFT_WRAPPER(strcpy, char*, char *dest, const char *src) {
-    char *result = strcpy(dest, src);
-    dift_copy_mem_tags(dest, src, strlen(src) + 1);
-    dift_reg_tags[DIFT_RET] = dift_reg_tags[DIFT_ARG0];
-    return result;
-}
-
-DIFT_WRAPPER(strcat, char*, char *dest, const char *src) {
-    char *result = strcat(dest, src);
-    size_t len = strlen(src);
-    dift_copy_mem_tags(dest + strlen(dest) - len, src, len + 1);
     dift_reg_tags[DIFT_RET] = dift_reg_tags[DIFT_ARG0];
     return result;
 }
@@ -180,18 +149,13 @@ static void tag_strncat_result(char *dest, const char *src, size_t n) {
     dift_reg_tags[DIFT_RET] = dift_reg_tags[DIFT_ARG0];
 }
 
-DIFT_WRAPPER(strncat, char*, char *dest, const char *src, size_t n) {
-    char *result = strncat(dest, src, n);
-    tag_strncat_result(dest, src, n);
-    return result;
-}
-
 DIFT_WRAPPER(__strncat_chk, char*, char *dest, const char *src, size_t n, size_t s1len) {
     char *result = __strncat_chk(dest, src, n, s1len);
     tag_strncat_result(dest, src, n);
     return result;
 }
 
+// DFSan's strncpy wrapper takes strlen(src), reading past n when src is unterminated.
 DIFT_WRAPPER(strncpy, char*, char *dest, const char *src, size_t num) {
     char *result = strncpy(dest, src, num);
     size_t copy_len = strnlen(src, num);
@@ -203,13 +167,6 @@ DIFT_WRAPPER(strncpy, char*, char *dest, const char *src, size_t num) {
     return result;
 }
 
-DIFT_WRAPPER(memset, void*, void *dest, int ch, size_t count) {
-    void *result = memset(dest, ch, count);
-    dift_set_mem_tags(dest, dift_reg_tags[DIFT_ARG1], count);
-    dift_reg_tags[DIFT_RET] = dift_reg_tags[DIFT_ARG0];
-    return result;
-}
-
 DIFT_WRAPPER(__memset_chk, void*, void *dest, int ch, size_t count, size_t destlen) {
     void *result = __memset_chk(dest, ch, count, destlen);
     dift_set_mem_tags(dest, dift_reg_tags[DIFT_ARG1], count);
@@ -217,25 +174,3 @@ DIFT_WRAPPER(__memset_chk, void*, void *dest, int ch, size_t count, size_t destl
     return result;
 }
 
-DIFT_WRAPPER(strtok_r, char *, char *str, const char *delims, char **saveptr) {
-    dift_reg_tags[DIFT_RET] = dift_reg_tags[DIFT_ARG0];
-    return strtok_r(str, delims, saveptr);
-}
-
-DIFT_WRAPPER(strtok, char *, char *str, const char *delims) {
-    dift_reg_tags[DIFT_RET] = dift_reg_tags[DIFT_ARG0];
-    return strtok(str, delims);
-}
-
-DIFT_WRAPPER(strstr, char *, const char *haystack, const char *needle) {
-    dift_reg_tags[DIFT_RET] = dift_reg_tags[DIFT_ARG0];
-    return strstr(haystack, needle);
-}
-
-DIFT_WRAPPER(inet_pton, int, int af, const char *src, void *dst) {
-    int result = inet_pton(af, src, dst);
-    if (result == 1)
-        dift_set_mem_tags(dst, DIFT_MEM_TAG(src),
-                          af == AF_INET ? sizeof(struct in_addr) : sizeof(struct in6_addr));
-    return result;
-}

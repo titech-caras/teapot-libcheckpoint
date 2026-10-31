@@ -1,0 +1,47 @@
+# LLVM DFSan custom wrappers (vendored, unmodified)
+
+Files under `compiler-rt/` are copied byte for byte from LLVM
+(https://github.com/llvm/llvm-project), commit
+`2249530a922bd19e1a1418c5c6bf1b37ba6c1567` (2026-08-23), under
+`LICENSE.TXT` (Apache 2.0 with LLVM exceptions). Only what
+`dfsan/dfsan_custom.cpp` includes is copied. Upstream's
+`dfsan/dfsan_platform.h` is deliberately absent: libcheckpoint's
+`src/dift_wrappers/dfsan_platform/dfsan_platform.h` replaces it to map
+DFSan's shadow onto Teapot's. `src/dift_wrappers/dfsan_wrappers.cpp` builds the
+wrappers and lists which ones Teapot calls.
+
+To update, copy the same files from a newer commit, refresh the hashes below,
+and rerun the wrapper tests.
+
+```
+4b58122d6ad6b9c23f0d8c06d925ceb7c4a375d40a906e2d083cc135fff40b94  compiler-rt/lib/dfsan/dfsan_allocator.h
+8d03ec7f5a2a616d3234fa6440b3d7cfaf0907572ea7a8a2a3e1190cc555d906  compiler-rt/lib/dfsan/dfsan_chained_origin_depot.h
+5f80277937bc63fcec2fbca189f27cf3d197402855e4b9b47bc7586472cdaca3  compiler-rt/lib/dfsan/dfsan_custom.cpp
+4f8ff0539afde6f05bd052c57989d9572ef1abffc17ec409071f294d0a60aa5f  compiler-rt/lib/dfsan/dfsan_flags.h
+7785fecf51626807de8c37b7d3807492b2e24f0d159d91e50a3fa78ec59480c8  compiler-rt/lib/dfsan/dfsan_flags.inc
+366ed688f39053e12e21215a794a47063eadf8d50b262698d111dd1cc0aa57f3  compiler-rt/lib/dfsan/dfsan.h
+8391da09bbd4ee15775f59e42a55d05804258604fbb5a1f0ad4af5deb3dde759  compiler-rt/lib/dfsan/dfsan_thread.h
+17d6d4e88ced4f4e12d9f969ebec2429496051ae8081ac14d989b63296c1c8bd  compiler-rt/lib/sanitizer_common/sanitizer_atomic_clang.h
+59afde82f3a6c4ba37bd86f6979fdb6ee74c43380f834ebdb708f4e9337d1c87  compiler-rt/lib/sanitizer_common/sanitizer_atomic.h
+e1b838b95513c4b645b556afcc864d5a3398cca31ecb4937405a64db7e34cb2b  compiler-rt/lib/sanitizer_common/sanitizer_chained_origin_depot.h
+0f8ef4e329d3107d3567b813f7b5207f29ae96e48ab6ee6a3ed1e48a7c737c4e  compiler-rt/lib/sanitizer_common/sanitizer_common.h
+4a7c3860e0de09f6d0f6b04071176b6cb671cf39b47712bd6980e6643339d894  compiler-rt/lib/sanitizer_common/sanitizer_flags.h
+20bd3d717e3a2c6fd10c6a1e586b015372df72def8b6327a63fc4b754f6d8f88  compiler-rt/lib/sanitizer_common/sanitizer_flags.inc
+e8861016609e706bad6f176d389e15d71d0533b640df5f85a25f5a5406d3dd1a  compiler-rt/lib/sanitizer_common/sanitizer_internal_defs.h
+6a3424373d0dd637baa336b350b47bb94bac1c78780fb8ea2c9b87c2e3741b27  compiler-rt/lib/sanitizer_common/sanitizer_libc.h
+d416fb0b4150682ba02826d16cabac966ede31b8b08011d7799209b043e060d4  compiler-rt/lib/sanitizer_common/sanitizer_linux.h
+3eaad1e1ac17728eed3e3b5fd1ab0e869e9d016181db7c0b18a8dcc633de8ac4  compiler-rt/lib/sanitizer_common/sanitizer_list.h
+630355370686471060c24c1280e5670c2ce853603c0cd88bac546ea7a7e4f49b  compiler-rt/lib/sanitizer_common/sanitizer_mallinfo.h
+d44379b53a8041644ad47600686de05f9209f4eee3779d17dd7b31413c2cd533  compiler-rt/lib/sanitizer_common/sanitizer_mutex.h
+7500265e4c59c91d7426bbcf7eaaf06b55886519b7a3fab8e3dbdaaa93209747  compiler-rt/lib/sanitizer_common/sanitizer_platform.h
+df2f4acb615d9c625aa732c54ff0e10d0c373df446cd648983dab0fffae468be  compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_freebsd.h
+b8fe0f4567fe73a1b0ca18f95e3a0362fb256e45cb4212aad96ff9278c1c0895  compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_netbsd.h
+876d597b8f0d65f969b024a29ba9f1709f3cdd49e6a2fc32f2d3ef7d1e3e7650  compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.h
+7f0019f703b5523491990d2bc7a705f09a959193ab50a7ad3f7a4d86e469b8d2  compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_solaris.h
+fa3337432ea65848e2f641201c7c2f100bfacf8865d2b5311ce3b9da29b291a1  compiler-rt/lib/sanitizer_common/sanitizer_posix.h
+cdade2fd928390f62c8e1d63710ff1606315d5c7d3b157d16d67036478a0b2cd  compiler-rt/lib/sanitizer_common/sanitizer_redefine_builtins.h
+8bbec5bc0872aebbaacda941ff0afc86986ff07f8a15b4e379e0823c4b6bb9dd  compiler-rt/lib/sanitizer_common/sanitizer_stackdepot.h
+e2f36f1a75f5a00c3bb9f1ff5f648d3e02dc80e9993c3df971b66897ac66c075  compiler-rt/lib/sanitizer_common/sanitizer_stacktrace.h
+2770d9c2573c8a8c40d16b7488c549dccbb1c1c213091566e07c7764125ec131  compiler-rt/lib/sanitizer_common/sanitizer_thread_safety.h
+1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d  LICENSE.TXT
+```

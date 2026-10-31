@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
+#include <malloc.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -15,29 +16,21 @@
 
 #include "dift_support.h"
 
+extern void *malloc__dift_wrapper__(size_t);
 extern void *calloc__dift_wrapper__(size_t, size_t);
-extern char *strdup__dift_wrapper__(const char *);
-extern void *memcpy__dift_wrapper__(void *, const void *, size_t);
+extern void *realloc__dift_wrapper__(void *, size_t);
 extern void *__memcpy_chk__dift_wrapper__(void *, const void *, size_t, size_t);
-extern void *memmove__dift_wrapper__(void *, const void *, size_t);
-extern void *memset__dift_wrapper__(void *, int, size_t);
 extern void *__memset_chk__dift_wrapper__(void *, int, size_t, size_t);
-extern char *strcpy__dift_wrapper__(char *, const char *);
-extern char *strcat__dift_wrapper__(char *, const char *);
-extern char *strncat__dift_wrapper__(char *, const char *, size_t);
 extern char *__strncat_chk__dift_wrapper__(char *, const char *, size_t, size_t);
 extern char *strncpy__dift_wrapper__(char *, const char *, size_t);
-extern int inet_pton__dift_wrapper__(int, const char *, void *);
 extern size_t fread__dift_wrapper__(void *, size_t, size_t, FILE *);
 extern size_t fread_unlocked__dift_wrapper__(void *, size_t, size_t, FILE *);
 extern char *fgets__dift_wrapper__(char *, int, FILE *);
-extern char *__real_strdup(const char *);
 
 dift_tag_t dift_reg_tags[DIFT_REG_TAGS_SIZE];
 dift_tag_t dift_reg_queued_tags[DIFT_REG_TAGS_SIZE];
 static unsigned char *arena;
 static size_t arena_size;
-static bool fail_strdup;
 static struct {
     void *dest;
     const void *src;
@@ -46,14 +39,6 @@ static struct {
     unsigned count;
 } effect;
 static unsigned *shared_effect_count;
-
-char *__wrap_strdup(const char *source) {
-    if (fail_strdup) {
-        errno = ENOMEM;
-        return NULL;
-    }
-    return __real_strdup(source);
-}
 
 static bool in_arena(const void *address, size_t size) {
     uintptr_t base = (uintptr_t)arena, pointer = (uintptr_t)address;
@@ -104,22 +89,26 @@ static void allocations(void) {
     void *result = calloc__dift_wrapper__(SIZE_MAX, 2);
     assert(result == NULL && effect.count == 0);
     result = calloc__dift_wrapper__(3, 7);
-    assert(result != NULL && effect.count == 1);
+    assert(result != NULL && effect.count == 1 && dift_reg_tags[DIFT_RET] == 0);
     assert(effect.dest == result && effect.length == 21 && effect.tag == 0);
     for (size_t i = 0; i < 21; i++) assert(((unsigned char *)result)[i] == 0);
     free(result);
 
-    char *source = (char *)arena + 32;
-    strcpy(source, "value");
-    effect.count = 0;
-    fail_strdup = true;
-    errno = 0;
-    assert(strdup__dift_wrapper__(source) == NULL && errno == ENOMEM && effect.count == 0);
-    fail_strdup = false;
-    result = strdup__dift_wrapper__(source);
-    assert(result != NULL && strcmp(result, source) == 0);
-    assert(effect.count == 1 && effect.dest == result && effect.src == source && effect.length == 6);
-    free(result);
+    reset();
+    result = malloc__dift_wrapper__(21);
+    assert(result != NULL && effect.count == 1 && dift_reg_tags[DIFT_RET] == 0);
+    assert(effect.dest == result && effect.length == 21 && effect.tag == 0);
+
+    // A grown block keeps the old contents' tags and clears the rest.
+    memset(result, 7, 21);
+    size_t kept = malloc_usable_size(result);
+    reset();
+    void *grown = realloc__dift_wrapper__(result, 4096);
+    assert(grown != NULL && dift_reg_tags[DIFT_RET] == 0);
+    for (size_t i = 0; i < 21; i++) assert(((unsigned char *)grown)[i] == 7);
+    assert(effect.dest == (char *)grown + kept && effect.length == 4096 - kept && effect.tag == 0);
+    assert(effect.count == (grown == result ? 1 : 2));
+    free(grown);
 }
 
 static void memory(void) {
@@ -128,14 +117,10 @@ static void memory(void) {
         src[i] = i;
         DIFT_MEM_TAG(src + i) = i + 1;
     }
-    assert(memcpy__dift_wrapper__(dest, src, 12) == dest);
-    assert(memcmp(dest, src, 12) == 0 && memcmp(DIFT_MEM_ADDR(dest), DIFT_MEM_ADDR(src), 12) == 0);
-    assert(dift_reg_tags[DIFT_RET] == 0x12);
     assert(__memcpy_chk__dift_wrapper__(dest, src, 16, 24) == dest);
+    assert(memcmp(dest, src, 16) == 0 && memcmp(DIFT_MEM_ADDR(dest), DIFT_MEM_ADDR(src), 16) == 0);
+    assert(dift_reg_tags[DIFT_RET] == 0x12);
     assert(dest[16] == 0xa5 && DIFT_MEM_TAG(dest + 16) == 0x40);
-    assert(memmove__dift_wrapper__(src + 2, src, 16) == src + 2);
-    for (unsigned i = 0; i < 16; i++) assert(src[i + 2] == i && DIFT_MEM_TAG(src + i + 2) == i + 1);
-    assert(memset__dift_wrapper__(dest, 0x5a, 12) == dest);
     assert(__memset_chk__dift_wrapper__(dest, 0x5b, 12, 24) == dest);
     for (unsigned i = 0; i < 12; i++) assert(dest[i] == 0x5b && DIFT_MEM_TAG(dest + i) == 0x11);
     assert(dest[12] == 12 && DIFT_MEM_TAG(dest + 12) == 13);
@@ -145,58 +130,26 @@ static void strings(void) {
     char *src = (char *)arena + 32, *dest = (char *)arena + 128;
     strcpy(src, "abc");
     for (unsigned i = 0; i < 4; i++) DIFT_MEM_TAG(src + i) = i + 1;
-    assert(strcpy__dift_wrapper__(dest, src) == dest && strcmp(dest, src) == 0);
-    assert(memcmp(DIFT_MEM_ADDR(dest), DIFT_MEM_ADDR(src), 4) == 0);
-    assert(dest[4] == (char)0xa5 && DIFT_MEM_TAG(dest + 4) == 0x40);
-
-    strcpy(dest, "prefix-");
-    memset(DIFT_MEM_ADDR(dest), 0x40, 24);
-    assert(strcat__dift_wrapper__(dest, src) == dest && strcmp(dest, "prefix-abc") == 0);
-    assert(memcmp(DIFT_MEM_ADDR(dest + 7), DIFT_MEM_ADDR(src), 4) == 0);
-    assert(DIFT_MEM_TAG(dest + 6) == 0x40 && DIFT_MEM_TAG(dest + 11) == 0x40);
 
     for (size_t limit = 0; limit <= 5; limit++) {
-        for (unsigned checked = 0; checked < 2; checked++) {
-            strcpy(dest, "prefix-");
-            memset(DIFT_MEM_ADDR(dest), 0x40, 24);
-            size_t copied = limit < 3 ? limit : 3;
-            char *result = checked ? __strncat_chk__dift_wrapper__(dest, src, limit, 24)
-                                   : strncat__dift_wrapper__(dest, src, limit);
-            assert(result == dest && strlen(dest) == 7 + copied);
-            assert(memcmp(dest + 7, src, copied) == 0);
-            for (size_t i = 0; i < copied; i++) assert(DIFT_MEM_TAG(dest + 7 + i) == i + 1);
-            assert(DIFT_MEM_TAG(dest + 7 + copied) == (copied < limit ? 4 : 0));
-            assert(DIFT_MEM_TAG(dest + 6) == 0x40 && DIFT_MEM_TAG(dest + 8 + copied) == 0x40);
-        }
+        strcpy(dest, "prefix-");
+        memset(DIFT_MEM_ADDR(dest), 0x40, 24);
+        size_t copied = limit < 3 ? limit : 3;
+        assert(__strncat_chk__dift_wrapper__(dest, src, limit, 24) == dest);
+        assert(strlen(dest) == 7 + copied && memcmp(dest + 7, src, copied) == 0);
+        for (size_t i = 0; i < copied; i++) assert(DIFT_MEM_TAG(dest + 7 + i) == i + 1);
+        assert(DIFT_MEM_TAG(dest + 7 + copied) == (copied < limit ? 4 : 0));
+        assert(DIFT_MEM_TAG(dest + 6) == 0x40 && DIFT_MEM_TAG(dest + 8 + copied) == 0x40);
     }
     memset(DIFT_MEM_ADDR(dest), 0x40, 24);
     assert(strncpy__dift_wrapper__(dest, src, 8) == dest);
     assert(memcmp(DIFT_MEM_ADDR(dest), DIFT_MEM_ADDR(src), 3) == 0);
     for (unsigned i = 3; i < 8; i++) assert(dest[i] == 0 && DIFT_MEM_TAG(dest + i) == 0);
     assert(DIFT_MEM_TAG(dest + 8) == 0x40);
-}
-
-static void addresses(void) {
-    const char *sources[] = {"192.0.2.1", "2001:db8::1", "invalid", "invalid"};
-    const int families[] = {AF_INET, AF_INET6, AF_INET, -1};
-    char *source = (char *)arena + 32;
-    void *dest = arena + 128;
-    for (unsigned i = 0; i < 4; i++) {
-        reset();
-        strcpy(source, sources[i]);
-        DIFT_MEM_TAG(source) = TAG_ATTACKER;
-        unsigned char expected[32];
-        memset(expected, 0xa5, sizeof(expected));
-        errno = 0;
-        int status = inet_pton(families[i], source, expected), saved_errno = errno;
-        errno = 0;
-        assert(inet_pton__dift_wrapper__(families[i], source, dest) == status && errno == saved_errno);
-        assert(memcmp(dest, expected, sizeof(expected)) == 0);
-        size_t written = status == 1 ? (families[i] == AF_INET ? 4 : 16) : 0;
-        for (size_t j = 0; j < sizeof(expected); j++)
-            assert(DIFT_MEM_TAG((unsigned char *)dest + j) == (j < written ? TAG_ATTACKER : 0x40));
-        assert(effect.count == (status == 1));
-    }
+    // An unterminated source of exactly n bytes is read no further.
+    char *edge = (char *)arena + arena_size - 4;
+    memcpy(edge, "wxyz", 4);
+    assert(strncpy__dift_wrapper__(dest, edge, 4) == dest && memcmp(dest, "wxyz", 4) == 0);
 }
 
 struct input_source {
@@ -386,7 +339,6 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "allocations") == 0) allocations();
     else if (strcmp(argv[1], "memory") == 0) memory();
     else if (strcmp(argv[1], "strings") == 0) strings();
-    else if (strcmp(argv[1], "addresses") == 0) addresses();
     else if (strcmp(argv[1], "block-input") == 0) block_input();
     else if (strcmp(argv[1], "line-input") == 0) line_input();
     else if (strcmp(argv[1], "fortified-failure") == 0) fortified_failure();

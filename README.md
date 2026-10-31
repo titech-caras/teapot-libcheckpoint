@@ -8,6 +8,8 @@ AArch64, and RV64 variants.
 - `include/`: public runtime headers and architecture constants.
 - `src/`: C runtime implementation.
 - `src/dift_wrappers/`: DIFT external-call wrappers.
+- `third_party/llvm-dfsan/`: LLVM DFSan's custom libc wrappers, unmodified
+  (`UPSTREAM.md` records the commit and file hashes).
 - `asm/`: architecture-specific checkpoint/restore assembly.
 
 ## Build
@@ -32,7 +34,7 @@ fields. `TEAPOT_RISCV_PROFILE=lp64-pure` is a separate, optional integer-only
 profile for the RV64 IMAC/Zicsr/Zifencei/Zicond compiler baseline and
 LP64 calling ABI. It refuses FP checkpoint state, FP/vector/B compiler targets,
 non-RV64, and AArch64 BTI/PAC. LP64 flags alone never establish FP-free code.
-Math/zlib wrappers receive the same compiler checks.
+zlib wrappers receive the same compiler checks.
 
 The PURE contract fingerprints `riscv.calling_abi=lp64`,
 `riscv.profile=lp64-pure`, and `riscv.fp_policy=fp-free-fail-closed`.
@@ -199,6 +201,21 @@ For GCC 13+ ASan, configure `-DTEAPOT_DIFT_LAYOUT=x64-la48-asan-new` for this
 test. CTest disables it for GCC 13+ with the legacy `x64-la48` layout, which can
 abort during preinitialization; a disabled test is not validation. Under a tracing
 launcher, run CTest with `ASAN_OPTIONS=detect_leaks=0:abort_on_error=1`.
+Most libc wrappers are LLVM DFSan's custom wrappers (`dfsan_custom.cpp`), built
+unmodified in `src/dift_wrappers/dfsan_wrappers.cpp` with a replacement
+`dfsan_platform.h` that maps DFSan's 8-bit labels onto Teapot's tag shadow, and
+with DFSan's `strict_data_dependencies` off: a length, comparison or search
+result carries the tags of the bytes it read. Bridges named `NAME__dift_wrapper__`
+pass the argument registers' tags to `__dfsw_NAME` and store its result label.
+The C compiler builds this unit as C++ (`-x c++`, so a C++ front end such as
+`cc1plus` must be installed for the target), and `llvm-objcopy`, or else the
+toolchain's `objcopy`, keeps only the bridges global. The comparison wrappers
+compute their results themselves: the sign always matches libc, the magnitude is
+the byte difference. Teapot's own wrappers are the taint sources, the allocator
+(`malloc`, `calloc` and `realloc` clear or move the shadow, as DFSan's allocator
+does), the fortified `_chk` copies and `strncpy`, whose DFSan wrapper reads past
+`n`. The DFSan wrapper tests compare results with libc, including bytes >= 0x80
+and C23 `strtol` prefixes, and check each label rule.
 Libc wrapper tests compare return values, failure behavior, destination bytes,
 and tag-update ranges, including fortified-call bounds and string terminators.
 Block-input tests also cover partial `fread` elements, pipes and stream errors;
@@ -371,10 +388,9 @@ with `GLIBC_TUNABLES=glibc.mem.tagging=1`.
 
 ## Optional Wrappers
 
-The core runtime includes the libc DIFT wrappers used by existing tests.  The
-wrappers that require extra libraries can be built as opt-in companion targets:
+The core runtime includes the libc DIFT wrappers.  The wrappers that require
+an extra library can be built as an opt-in companion target:
 
-- `checkpoint_dift_math_wrappers`: wrappers that require `libm`.
 - `checkpoint_dift_zlib_wrappers`: wrappers that require zlib.
 
 Only link these libraries when the instrumented binary references the matching

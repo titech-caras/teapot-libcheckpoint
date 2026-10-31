@@ -11,6 +11,14 @@ set(ALLOWED
     runtime_mapped_range_count
     signal_stack                 # the sigaltstack descriptor, handed to the kernel once
     probe_target                 # the BTI activation probe's target
+    # LLVM DFSan's wrapper state (dfsan_wrappers.cpp). The flags stay zero and
+    # are only read; the rest belongs to wrappers Teapot never calls.
+    _ZN7__dfsan10flags_dataE
+    _ZN11__sanitizer17current_verbosityE
+    _ZL10sigactions
+    _ZL19write_callback_info
+    _ZL19write_callback_info.0  # clang's name for it after optimization
+    _ZN12_GLOBAL__N_116SignalSpinLocker13sigactions_muE
 )
 # Data, BSS, small data, common, weak and unique objects. nm classes every weak
 # object V whatever its section, so the section decides for those. Read-only
