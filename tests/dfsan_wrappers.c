@@ -16,7 +16,6 @@
 #include "dift_support.h"
 
 extern void *memcpy__dift_wrapper__(void *, const void *, size_t);
-extern void *memmove__dift_wrapper__(void *, const void *, size_t);
 extern void *memset__dift_wrapper__(void *, int, size_t);
 extern char *strcpy__dift_wrapper__(char *, const char *);
 extern char *strcat__dift_wrapper__(char *, const char *);

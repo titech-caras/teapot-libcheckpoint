@@ -20,6 +20,7 @@ extern void *malloc__dift_wrapper__(size_t);
 extern void *calloc__dift_wrapper__(size_t, size_t);
 extern void *realloc__dift_wrapper__(void *, size_t);
 extern void *__memcpy_chk__dift_wrapper__(void *, const void *, size_t, size_t);
+extern void *memmove__dift_wrapper__(void *, const void *, size_t);
 extern void *__memset_chk__dift_wrapper__(void *, int, size_t, size_t);
 extern char *strncat__dift_wrapper__(char *, const char *, size_t);
 extern char *__strncat_chk__dift_wrapper__(char *, const char *, size_t, size_t);
@@ -124,6 +125,9 @@ static void memory(void) {
     assert(memcmp(dest, src, 16) == 0 && memcmp(DIFT_MEM_ADDR(dest), DIFT_MEM_ADDR(src), 16) == 0);
     assert(dift_reg_tags[DIFT_RET] == 0x12);
     assert(dest[16] == 0xa5 && DIFT_MEM_TAG(dest + 16) == 0x40);
+    // Overlapping: bytes and tags both move as memmove does.
+    assert(memmove__dift_wrapper__(src + 2, src, 16) == src + 2 && dift_reg_tags[DIFT_RET] == 0x12);
+    for (unsigned i = 0; i < 16; i++) assert(src[i + 2] == i && DIFT_MEM_TAG(src + i + 2) == i + 1);
     assert(__memset_chk__dift_wrapper__(dest, 0x5b, 12, 24) == dest);
     for (unsigned i = 0; i < 12; i++) assert(dest[i] == 0x5b && DIFT_MEM_TAG(dest + i) == 0x11);
     assert(dest[12] == 12 && DIFT_MEM_TAG(dest + 12) == 13);

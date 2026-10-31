@@ -154,7 +154,6 @@ void SetCurrentThread(DFsanThread *) { __builtin_trap(); }
   }
 
 DFSW_BRIDGE3(void *, memcpy, void *, const void *, size_t)
-DFSW_BRIDGE3(void *, memmove, void *, const void *, size_t)
 DFSW_BRIDGE3(void *, memset, void *, int, size_t)
 DFSW_BRIDGE2(char *, strcpy, char *, const char *)
 DFSW_BRIDGE2(char *, strcat, char *, const char *)

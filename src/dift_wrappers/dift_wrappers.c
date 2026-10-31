@@ -19,7 +19,7 @@ extern char *__strncat_chk(char *dest, const char *src, size_t count, size_t des
 extern size_t _IO_getline(FILE *stream, char *buffer, size_t size, int delimiter, int extract);
 
 // Teapot's own wrappers: the taint sources, the allocator, the fortified
-// copies, strncat and strncpy. LLVM DFSan's wrappers (dfsan_wrappers.cpp)
+// copies, memmove, strncat and strncpy. LLVM DFSan's wrappers (dfsan_wrappers.cpp)
 // cover the other libc calls Teapot redirects; teapot/dfsan/ in Teapot lists
 // which calls go where.
 
@@ -138,7 +138,16 @@ DIFT_WRAPPER(realloc, void *, void *old, size_t size) {
 }
 
 // DFSan has no wrappers for the fortified _chk copies, and its strncat and
-// strncpy wrappers read past n when the source is unterminated.
+// strncpy wrappers read past n when the source is unterminated. Its memmove
+// wrapper moves the tags with the sanitizer's memmove, which under ASan is
+// libc's checked one: on AArch64 ASan rejects the tag addresses and aborts.
+DIFT_WRAPPER(memmove, void *, void *dest, const void *src, size_t count) {
+    void *result = memmove(dest, src, count);
+    dift_move_mem_tags(dest, src, count);
+    dift_reg_tags[DIFT_RET] = dift_reg_tags[DIFT_ARG0];
+    return result;
+}
+
 DIFT_WRAPPER(__memcpy_chk, void*, void *dest, const void *src, size_t count, size_t destlen) {
     void *result = __memcpy_chk(dest, src, count, destlen);
     dift_copy_mem_tags(dest, src, count);
