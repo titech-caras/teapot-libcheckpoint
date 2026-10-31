@@ -33,17 +33,23 @@ DIFT_WRAPPER(read, ssize_t, int fd, void *buf, size_t count) {
     return read_size;
 }
 
+// Result tags are set after the libc call: a stream's own read function
+// (fopencookie) may be instrumented program code that writes tags meanwhile.
 static size_t tagged_fread(void *buffer, size_t size, size_t count, FILE *stream,
                            size_t (*read_fn)(void *, size_t, size_t, FILE *)) {
-    dift_reg_tags[DIFT_RET] = 0;
-    if (size == 0 || count > SIZE_MAX / size)
-        return read_fn(buffer, size, count, stream);
-    // A partial final element is copied but omitted from fread's item count.
-    size_t read_bytes = read_fn(buffer, 1, size * count, stream);
-    if (read_bytes > 0) {
-        dift_set_mem_tags(buffer, TAG_ATTACKER, read_bytes);
+    size_t result;
+    if (size == 0 || count > SIZE_MAX / size) {
+        result = read_fn(buffer, size, count, stream);
+    } else {
+        // A partial final element is copied but omitted from fread's item count.
+        size_t read_bytes = read_fn(buffer, 1, size * count, stream);
+        if (read_bytes > 0) {
+            dift_set_mem_tags(buffer, TAG_ATTACKER, read_bytes);
+        }
+        result = read_bytes / size;
     }
-    return read_bytes / size;
+    dift_reg_tags[DIFT_RET] = 0;
+    return result;
 }
 
 // Taint source: fread.
@@ -58,10 +64,13 @@ DIFT_WRAPPER(fread_unlocked, size_t, void *buffer, size_t size, size_t count, FI
 
 // Taint source: fgets.
 DIFT_WRAPPER(fgets, char *, char *str, int n, FILE *stream) {
+    // Before the call: on AArch64 and RV the first argument's tag shares the
+    // result register's slot, which a stream callback may write.
+    const dift_tag_t str_tag = dift_reg_tags[DIFT_ARG0];
     if (n <= 1) {
         char *result = fgets(str, n, stream);
         if (result) dift_set_mem_tags(str, 0, 1);
-        dift_reg_tags[DIFT_RET] = result ? dift_reg_tags[DIFT_ARG0] : 0;
+        dift_reg_tags[DIFT_RET] = result ? str_tag : 0;
         return result;
     }
 
@@ -80,27 +89,30 @@ DIFT_WRAPPER(fgets, char *, char *str, int n, FILE *stream) {
         dift_set_mem_tags(str + count, 0, 1);
     }
     funlockfile(stream);
-    dift_reg_tags[DIFT_RET] = success ? dift_reg_tags[DIFT_ARG0] : 0;
+    dift_reg_tags[DIFT_RET] = success ? str_tag : 0;
     errno = saved_errno;
     return success ? str : NULL;
 }
 
 // Taint source: getc.
 DIFT_WRAPPER(getc, int, FILE *file) {
+    int c = getc(file);
     dift_reg_tags[DIFT_RET] = TAG_ATTACKER;
-    return getc(file);
+    return c;
 }
 
 // Taint source: fgetc.
 DIFT_WRAPPER(fgetc, int, FILE *file) {
+    int c = fgetc(file);
     dift_reg_tags[DIFT_RET] = TAG_ATTACKER;
-    return fgetc(file);
+    return c;
 }
 
 // Taint source: getchar.
 DIFT_WRAPPER(getchar, int) {
+    int c = getchar();
     dift_reg_tags[DIFT_RET] = TAG_ATTACKER;
-    return getchar();
+    return c;
 }
 
 // DFSan's own allocator clears the shadow of new memory and moves it on

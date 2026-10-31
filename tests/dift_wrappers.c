@@ -176,6 +176,8 @@ struct input_source {
 
 static ssize_t input_read(void *cookie, char *buffer, size_t size) {
     struct input_source *input = cookie;
+    // As instrumented program code would: the wrappers must set result tags after this.
+    dift_reg_tags[DIFT_RET] = 0x77;
     if (input->priming || input->offset == input->length) {
         if (!input->terminal_errno) return 0;
         errno = input->terminal_errno;
@@ -282,6 +284,7 @@ static void line_input(void) {
                                 eof = feof(stream);
                                 error = ferror(stream);
                             } else {
+                                dift_reg_tags[DIFT_ARG0] = 0x12;  // the caller's argument tag, after priming
                                 char *actual = fgets__dift_wrapper__((char *)arena, n, stream);
                                 if (actual != (result ? (char *)arena : NULL))
                                     fprintf(stderr, "line input: mode=%u err=%d primed=%u length=%zu n=%d result=%d actual=%p errno=%d/%d flags=%d,%d/%d,%d\n",
