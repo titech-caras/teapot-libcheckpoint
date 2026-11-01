@@ -26,7 +26,7 @@ using namespace __sanitizer;
 
 // Labels are Teapot tags, combined by OR. Zero-initialized flags leave
 // strict_data_dependencies off: a scan or comparison result carries the
-// tags of the bytes it read, as in a static binary's instrumented libc.
+// tags of the bytes it read, as when libc itself is instrumented.
 namespace __dfsan {
 Flags flags_data;
 }
