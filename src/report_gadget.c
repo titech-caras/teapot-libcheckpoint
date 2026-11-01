@@ -151,7 +151,7 @@ static size_t report_channel_unsigned(char *out, uint64_t value) {
     return size;
 }
 
-static void report_channel_gadget(int gadget_type, uint64_t gadget_addr) {
+static void report_channel_gadget(int gadget_type, uint64_t gadget_addr, dift_tag_t tag) {
     if (report_channel_fd == REPORT_CHANNEL_FD_NONE)
         return;
 
@@ -164,7 +164,7 @@ static void report_channel_gadget(int gadget_type, uint64_t gadget_addr) {
         size += report_channel_unsigned(record + size, report_channel_dropped);
         record[size++] = '\n';
     }
-    const char *prefix = "TPGADGET 1 ";
+    const char *prefix = "TPGADGET 2 ";
     while (*prefix)
         record[size++] = *prefix++;
 
@@ -189,6 +189,8 @@ static void report_channel_gadget(int gadget_type, uint64_t gadget_addr) {
     } while (gadget_addr);
     while (count)
         record[size++] = digits[--count];
+    record[size++] = ' ';
+    size += report_channel_unsigned(record + size, tag);
     record[size++] = '\n';
 
     if (report_channel_write(record, size))
@@ -472,7 +474,7 @@ void report_gadget(const char * gadget_desc, int gadget_type, uint64_t gadget_ad
     simulation_statistics.total_bug++;
     simulation_statistics.bug_type[gadget_type]++;
 
-    report_channel_gadget(gadget_type, gadget_addr);
+    report_channel_gadget(gadget_type, gadget_addr, tag);
 
     report_text("[teapot], ");
     if (gadget_type < 0)
@@ -510,25 +512,29 @@ void report_gadget(const char * gadget_desc, int gadget_type, uint64_t gadget_ad
  * overwrite every XMM register, while report sites can occur in the middle of
  * hand-written assembly that keeps values live in those registers.
  */
-#define DEF_REPORT_GADGET(TYPE) \
+#define DEF_REPORT_GADGET(TYPE, DESCRIPTION) \
     void report_gadget_x64_impl_##TYPE(uint64_t gadget_addr, uint64_t access_addr, dift_tag_t tag) { \
         preserve_report_scratch_registers(); \
-        report_gadget(STR(TYPE), GADGET_##TYPE, gadget_addr, access_addr, tag); \
+        report_gadget(DESCRIPTION, GADGET_##TYPE, gadget_addr, access_addr, tag); \
         restore_report_scratch_registers(); \
     }
 
-DEF_REPORT_GADGET(KASPER_CACHE);
-DEF_REPORT_GADGET(KASPER_MDS);
-DEF_REPORT_GADGET(KASPER_PORT);
+DEF_REPORT_GADGET(KASPER_CACHE, "KASPER_CACHE");
+DEF_REPORT_GADGET(KASPER_MDS, "KASPER_MDS");
+DEF_REPORT_GADGET(KASPER_PORT, "KASPER_PORT");
+DEF_REPORT_GADGET(KASPER_CACHE_STORE, "KASPER_CACHE_STORE");
+DEF_REPORT_GADGET(TARGET, "GADGET_TARGET");
 #else
-#define DEF_REPORT_GADGET(TYPE) \
+#define DEF_REPORT_GADGET(TYPE, DESCRIPTION) \
     void report_gadget_##TYPE(uint64_t gadget_addr, uint64_t access_addr, dift_tag_t tag) { \
-        report_gadget(STR(TYPE), GADGET_##TYPE, gadget_addr, access_addr, tag); \
+        report_gadget(DESCRIPTION, GADGET_##TYPE, gadget_addr, access_addr, tag); \
     }
 
-LIBCHECKPOINT_PRESERVE_MOST DEF_REPORT_GADGET(KASPER_CACHE);
-LIBCHECKPOINT_PRESERVE_MOST DEF_REPORT_GADGET(KASPER_MDS);
-LIBCHECKPOINT_PRESERVE_MOST DEF_REPORT_GADGET(KASPER_PORT);
+LIBCHECKPOINT_PRESERVE_MOST DEF_REPORT_GADGET(KASPER_CACHE, "KASPER_CACHE");
+LIBCHECKPOINT_PRESERVE_MOST DEF_REPORT_GADGET(KASPER_MDS, "KASPER_MDS");
+LIBCHECKPOINT_PRESERVE_MOST DEF_REPORT_GADGET(KASPER_PORT, "KASPER_PORT");
+LIBCHECKPOINT_PRESERVE_MOST DEF_REPORT_GADGET(KASPER_CACHE_STORE, "KASPER_CACHE_STORE");
+LIBCHECKPOINT_PRESERVE_MOST DEF_REPORT_GADGET(TARGET, "GADGET_TARGET");
 #endif
 
 #undef DEF_REPORT_GADGET

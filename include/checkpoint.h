@@ -276,6 +276,8 @@ typedef __attribute__((aligned(16))) uint8_t scratchpad_t[SCRATCHPAD_SIZE];
 #define GADGET_KASPER_MDS 41
 #define GADGET_KASPER_CACHE 42
 #define GADGET_KASPER_PORT 43
+#define GADGET_KASPER_CACHE_STORE 44
+#define GADGET_TARGET 45
 
 extern scratchpad_t scratchpad;
 extern memory_history_t memory_history[MEM_HISTORY_LEN];

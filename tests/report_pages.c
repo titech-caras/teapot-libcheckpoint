@@ -209,7 +209,9 @@ static void check_patch(const char *mode, bool compressed, unsigned failing_call
     bool crossing = strcmp(mode, "crossing") == 0 || strcmp(mode, "failure") == 0 ||
                     strcmp(mode, "missing-tail") == 0 || strcmp(mode, "restore-failure") == 0;
     bool missing = strcmp(mode, "isolated") == 0 || strcmp(mode, "missing-tail") == 0;
-    bool full_report = strcmp(mode, "no-heap") == 0 || strcmp(mode, "format") == 0 ||
+    int kind = strcmp(mode, "store") == 0 ? GADGET_KASPER_CACHE_STORE :
+               strcmp(mode, "target") == 0 ? GADGET_TARGET : GADGET_KASPER_CACHE;
+    bool full_report = kind != GADGET_KASPER_CACHE || strcmp(mode, "no-heap") == 0 || strcmp(mode, "format") == 0 ||
                        strcmp(mode, "long-format") == 0 || strcmp(mode, "disabled") == 0;
     bool should_patch = !failing_call && !(crossing && missing) && !missing_maps && !read_error &&
                         strcmp(mode, "disabled") != 0;
@@ -246,14 +248,15 @@ static void check_patch(const char *mode, bool compressed, unsigned failing_call
         memset(description, 'x', sizeof(description) - 1);
         description[sizeof(description) - 1] = '\0';
     } else {
-        strcpy(description, "KASPER_CACHE");
+        strcpy(description, kind == GADGET_TARGET ? "GADGET_TARGET" :
+                            kind == GADGET_KASPER_CACHE_STORE ? "KASPER_CACHE_STORE" : "KASPER_CACHE");
     }
     if (full_report) {
         instruction_cnt = UINT64_MAX;
         checkpoint_cnt = MAX_CHECKPOINTS;
         size_t size = (size_t)snprintf(expected, sizeof(expected),
-            "[teapot], 42 %s, 0x%" PRIxPTR ", 0xffffffffffffffff, 0xff, 18446744073709551615, ",
-            description, address);
+            "[teapot], %d %s, 0x%" PRIxPTR ", 0xffffffffffffffff, 0xff, 18446744073709551615, ",
+            kind, description, address);
         for (size_t i = checkpoint_cnt; i > 0; i--) {
             checkpoint_metadata[i - 1].return_address = UINT64_MAX - i;
             size += (size_t)snprintf(expected + size, sizeof(expected) - size,
@@ -269,7 +272,7 @@ static void check_patch(const char *mode, bool compressed, unsigned failing_call
 #endif
     in_report = true;
     if (full_report)
-        report_gadget(description, GADGET_KASPER_CACHE, address, UINT64_MAX, 0xff);
+        report_gadget(description, kind, address, UINT64_MAX, 0xff);
     else
         make_report_call_nop(address);
     in_report = false;
@@ -278,9 +281,10 @@ static void check_patch(const char *mode, bool compressed, unsigned failing_call
                                  __stop_teapot_protected - __start_teapot_protected);
 #endif
     if (full_report) {
+        assert(instruction_cnt == UINT64_MAX && checkpoint_cnt == MAX_CHECKPOINTS);
         assert(strcmp(output, libcheckpoint_enabled ? expected : "") == 0);
         assert(simulation_statistics.total_bug == (unsigned)libcheckpoint_enabled);
-        assert(simulation_statistics.bug_type[GADGET_KASPER_CACHE] == (unsigned)libcheckpoint_enabled);
+        assert(simulation_statistics.bug_type[kind] == (unsigned)libcheckpoint_enabled);
     }
     if (strcmp(mode, "restore-failure") == 0)
         _exit(99);  /* Returning must not be mistaken for an assertion's SIGABRT. */

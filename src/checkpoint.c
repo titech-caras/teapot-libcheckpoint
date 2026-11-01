@@ -590,6 +590,8 @@ void print_statistics() {
     fprintf(stderr, "\tBug KASPER_MDS: %" PRIu64 "\n", simulation_statistics.bug_type[GADGET_KASPER_MDS]);
     fprintf(stderr, "\tBug KASPER_CACHE: %" PRIu64 "\n", simulation_statistics.bug_type[GADGET_KASPER_CACHE]);
     fprintf(stderr, "\tBug KASPER_PORT: %" PRIu64 "\n", simulation_statistics.bug_type[GADGET_KASPER_PORT]);
+    fprintf(stderr, "\tBug KASPER_CACHE_STORE: %" PRIu64 "\n", simulation_statistics.bug_type[GADGET_KASPER_CACHE_STORE]);
+    fprintf(stderr, "\tBug GADGET_TARGET: %" PRIu64 "\n", simulation_statistics.bug_type[GADGET_TARGET]);
 
 #ifdef TIME
 

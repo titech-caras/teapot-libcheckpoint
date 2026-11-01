@@ -379,6 +379,10 @@ if(BUILD_TESTING)
             COMMAND checkpoint_dfsan_wrappers_test ${check})
     endforeach()
 
+    add_executable(checkpoint_report_channel_test tests/report_channel.c src/report_gadget.c)
+    teapot_configure_checkpoint_target(checkpoint_report_channel_test)
+    add_test(NAME checkpoint_report_channel COMMAND checkpoint_report_channel_test)
+
     add_executable(checkpoint_report_pages_test
         tests/report_pages.c src/report_gadget.c)
     teapot_configure_checkpoint_target(checkpoint_report_pages_test)
@@ -389,7 +393,7 @@ if(BUILD_TESTING)
         -Wl,--wrap=fprintf -Wl,--wrap=snprintf -Wl,--wrap=fputs -Wl,--wrap=fputc
         -Wl,--wrap=syscall)
     foreach(check IN ITEMS isolated permissions crossing failure restore-failure missing-tail large-page
-                           no-heap no-maps read-error split-maps format long-format disabled)
+                           no-heap no-maps read-error split-maps format long-format disabled store target)
         add_test(NAME checkpoint_report_pages_${check}
             COMMAND checkpoint_report_pages_test ${check})
     endforeach()
