@@ -3,6 +3,7 @@
 #include "checkpoint.h"
 #include "fault_sites.h"
 
+#include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <errno.h>
@@ -12,6 +13,7 @@
 #include <string.h>
 #include <sys/auxv.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #include <ucontext.h>
 #include <unistd.h>
 
@@ -28,23 +30,15 @@ extern bool teapot_aarch64_pac_signal(int, siginfo_t *, void *) __attribute__((w
 #define AT_MINSIGSTKSZ 51
 #endif
 
+extern uintptr_t checkpoint_target_metadata[];
+
 struct saved_signal_action {
-    int sig;
     struct sigaction action;
     bool valid;
 };
 
 /* Read by the handler during simulation: protected like the runtime state. */
-static struct saved_signal_action saved_signal_actions[] LIBCHECKPOINT_PROTECTED_SECTION = {
-    { .sig = SIGSEGV },
-    { .sig = SIGILL },
-    { .sig = SIGFPE },
-    { .sig = SIGBUS },
-#ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
-    /* BRK has exception priority over BTI at a guarded indirect target. */
-    { .sig = SIGTRAP },
-#endif
-};
+static struct saved_signal_action saved_signal_actions[NSIG] LIBCHECKPOINT_PROTECTED_SECTION;
 LIBCHECKPOINT_ASSERT_PROTECTED(saved_signal_actions);
 
 /* saved_signal_actions is poisoned like the rest of the protected state, and a
@@ -63,15 +57,19 @@ static void copy_signal_action(struct sigaction *dst, const struct sigaction *sr
 }
 
 static struct saved_signal_action *saved_action_for_signal(int sig) {
-    for (size_t i = 0; i < sizeof(saved_signal_actions) / sizeof(saved_signal_actions[0]); i++) {
-        if (saved_signal_actions[i].sig == sig) {
-            return &saved_signal_actions[i];
-        }
-    }
-    return NULL;
+    return sig > 0 && sig < NSIG ? &saved_signal_actions[sig] : NULL;
 }
 
 static bool signal_can_refault(int sig, const siginfo_t *info) {
+    switch (sig) {
+    case SIGSEGV: case SIGILL: case SIGFPE: case SIGBUS:
+#ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
+    case SIGTRAP:
+#endif
+        break;
+    default:
+        return false;
+    }
     if (!info || info->si_code <= 0)
         return false;
     /* These positive-code reports are asynchronous: returning need not
@@ -114,12 +112,14 @@ static void invoke_saved_signal_action(int sig, siginfo_t *info, void *ucontext)
                 sigaddset(&mask, number);
         if (!(action->sa_flags & SA_NODEFER))
             sigaddset(&mask, sig);
+        uintptr_t landing_register = checkpoint_target_metadata[CHECKPOINT_TARGET_SCRATCH_REG_ADDR / 8];
         sigprocmask(SIG_SETMASK, &mask, &previous);
         if (action->sa_flags & SA_SIGINFO)
             action->sa_sigaction(sig, info, ucontext);
         else
             action->sa_handler(sig);
         sigprocmask(SIG_SETMASK, &previous, NULL);
+        checkpoint_target_metadata[CHECKPOINT_TARGET_SCRATCH_REG_ADDR / 8] = landing_register;
     }
 }
 
@@ -137,6 +137,99 @@ static uintptr_t *signal_program_counter(void *ucontext) {
 #else
 #error "Unsupported libcheckpoint signal architecture"
 #endif
+}
+
+/* Linux's kernel sigset has 64 bits on each supported ISA. Only bits added to
+ * the interrupted mask belong here; application-blocked signals stay blocked. */
+_Static_assert(NSIG == 65, "Linux kernel signal mask");
+uint64_t teapot_pending_signals LIBCHECKPOINT_PROTECTED_SECTION;
+uintptr_t teapot_signal_resume_target LIBCHECKPOINT_PROTECTED_SECTION;
+LIBCHECKPOINT_ASSERT_PROTECTED(teapot_pending_signals);
+LIBCHECKPOINT_ASSERT_PROTECTED(teapot_signal_resume_target);
+extern char __start_teapot_checkpoint[], __stop_teapot_checkpoint[];
+extern char __start_teapot_restore[], __stop_teapot_restore[];
+extern char teapot_restore_registers_end[], teapot_checkpoint_skip_jump[];
+extern char teapot_signal_resume_mask_load[], teapot_signal_resume_mask_ready[];
+extern char teapot_signal_resume_unblocked[];
+extern void teapot_signal_resume(void);
+
+static bool pc_in(uintptr_t pc, const void *start, const void *end) {
+    return pc >= (uintptr_t)start && pc < (uintptr_t)end;
+}
+
+static uintptr_t signal_stack_pointer(void *context) {
+    ucontext_t *uc = context;
+#if defined(__x86_64__)
+    return uc->uc_mcontext.gregs[REG_RSP];
+#elif defined(__aarch64__)
+    return uc->uc_mcontext.sp;
+#else
+    return uc->uc_mcontext.__gregs[2];
+#endif
+}
+
+bool teapot_signal_runtime_busy(void *context) {
+    uintptr_t pc = *signal_program_counter(context);
+    uintptr_t sp = signal_stack_pointer(context);
+    return checkpoint_cnt != 0 || in_restore_memlog ||
+        pc_in(pc, __start_teapot_checkpoint, __stop_teapot_checkpoint) ||
+        pc_in(pc, __start_teapot_restore, __stop_teapot_restore) ||
+        pc_in(pc, teapot_signal_resume, teapot_signal_resume_unblocked) ||
+        /* Restore callbacks (coverage, fault publishing) also borrow this
+         * stack, even when their PC is outside the runtime's own section. */
+        (sp >= (uintptr_t)scratchpad && sp < (uintptr_t)scratchpad + SCRATCHPAD_SIZE);
+}
+
+LIBCHECKPOINT_RESTORE_PATH void teapot_signal_prepare_resume(uint64_t *target) {
+    if (*target != (uintptr_t)teapot_signal_resume) {
+        teapot_signal_resume_target = *target;
+        *target = (uintptr_t)teapot_signal_resume;
+    }
+}
+
+static void defer_signal(int sig, siginfo_t *info, void *context) {
+    int interrupted_errno = errno;
+    ucontext_t *uc = context;
+    uintptr_t *pc = signal_program_counter(context);
+    uint64_t bit = UINT64_C(1) << (sig - 1);
+    if (sigismember(&uc->uc_sigmask, sig) != 1) {
+        sigaddset(&uc->uc_sigmask, sig);
+        if (pc_in(*pc, teapot_signal_resume_mask_ready, teapot_signal_resume_unblocked)) {
+            /* The stub has transferred ownership to its private stack frame.
+             * A second signal before the syscall must join that exact mask. */
+            *(uint64_t *)signal_stack_pointer(context) |= bit;
+        } else {
+            teapot_pending_signals |= bit;
+            if (pc_in(*pc, teapot_signal_resume_mask_load, teapot_signal_resume_mask_ready))
+                *pc = (uintptr_t)teapot_signal_resume_mask_load;
+        }
+    }
+    int result = syscall(SYS_rt_tgsigqueueinfo, getpid(), syscall(SYS_gettid), sig, info);
+    assert(result == 0);
+
+    if (checkpoint_cnt == 0) {
+        if (pc_in(*pc, __start_teapot_checkpoint, __stop_teapot_checkpoint)) {
+            /* An entry may skip speculation altogether. Its ordinary return
+             * still has to release the signal; a selected entry saves this
+             * same return target in checkpoint_metadata[0]. */
+            teapot_signal_prepare_resume(&checkpoint_target_metadata[CHECKPOINT_TARGET_RETURN_ADDR / 8]);
+#if defined(__aarch64__)
+            if (*pc == (uintptr_t)teapot_checkpoint_skip_jump)
+                uc->uc_mcontext.regs[16] = (uintptr_t)teapot_signal_resume;
+#elif defined(__riscv)
+            if (*pc == (uintptr_t)teapot_checkpoint_skip_jump)
+                uc->uc_mcontext.__gregs[5] = (uintptr_t)teapot_signal_resume;
+#endif
+        } else if (pc_in(*pc, __start_teapot_restore, __stop_teapot_restore)) {
+            teapot_signal_prepare_resume(&checkpoint_metadata[0].return_address);
+            /* A signal can land after C's pending check, or after assembly
+             * loaded the continuation. Replay only the register loads; they
+             * use the still-intact checkpoint and need no stack frame. */
+            if (pc_in(*pc, restore_checkpoint_registers, teapot_restore_registers_end))
+                *pc = (uintptr_t)restore_checkpoint_registers;
+        }
+    }
+    errno = interrupted_errno;
 }
 
 static void restart_restore_checkpoint_memlog(void *ucontext) {
@@ -167,7 +260,14 @@ void signal_handler(int sig, siginfo_t *info, void *ucontext) {
     /* A signal number alone does not identify a speculative fault. kill(),
      * raise() and sigqueue() deliver application notifications with nonpositive
      * codes, even when they interrupt a checkpoint or memory-log replay. */
-    const bool kernel_fault = info && info->si_code > 0;
+    const bool kernel_fault = signal_can_refault(sig, info);
+    struct saved_signal_action *saved = saved_action_for_signal(sig);
+    bool has_handler = saved && saved->valid && saved->action.sa_handler != SIG_DFL &&
+                       saved->action.sa_handler != SIG_IGN;
+    if (!kernel_fault && has_handler && teapot_signal_runtime_busy(ucontext)) {
+        defer_signal(sig, info, ucontext);
+        return;
+    }
 
 #ifdef TEAPOT_RISCV_LP64_PURE
     /* C1: a synchronous illegal instruction violates the reviewed PURE proof.
@@ -220,6 +320,8 @@ void signal_handler(int sig, siginfo_t *info, void *ucontext) {
         int interrupted_errno = errno;
         (void)write(STDERR_FILENO, message, sizeof(message) - 1);
         errno = interrupted_errno;
+        if (has_handler)
+            assert(!teapot_signal_runtime_busy(ucontext));
         invoke_saved_signal_action(sig, info, ucontext);
     }
 }
@@ -227,43 +329,53 @@ void signal_handler(int sig, siginfo_t *info, void *ucontext) {
 static void install_signal_handler(int sig, const struct sigaction *action) {
     struct saved_signal_action *saved = saved_action_for_signal(sig);
     struct sigaction previous;
-    if (sigaction(sig, action, &previous) != 0) {
+    if (sigaction(sig, NULL, &previous) != 0) {
         perror("sigaction");
         abort();
     }
     // Re-enabling the runtime must not chain its handler back to itself.
-    if (saved && !((previous.sa_flags & SA_SIGINFO) &&
-                   previous.sa_sigaction == signal_handler)) {
+    if (!((previous.sa_flags & SA_SIGINFO) && previous.sa_sigaction == signal_handler)) {
         copy_signal_action(&saved->action, &previous);
         saved->valid = true;
+    }
+    struct sigaction runtime_action = *action;
+    runtime_action.sa_flags |= saved->action.sa_flags & (SA_RESTART | SA_NOCLDSTOP | SA_NOCLDWAIT);
+    if (sigaction(sig, &runtime_action, NULL) != 0) {
+        perror("sigaction");
+        abort();
     }
 }
 
 int sigaction__teapot_wrapper__(int sig, const struct sigaction *action,
                                 struct sigaction *old_action) {
     struct saved_signal_action *saved = saved_action_for_signal(sig);
-    if (!saved || !saved->valid)
+    if (!saved)
         return sigaction(sig, action, old_action);
 
-    // Only calls from rewritten code use this entry. Runtime/libc/ASan calls
-    // still reach libc directly, avoiding interposition recursion at startup.
+    // Only rewritten calls use this entry; runtime/libc/ASan still call libc.
     sigset_t all, previous_mask;
     sigfillset(&all);
     if (sigprocmask(SIG_BLOCK, &all, &previous_mask) != 0)
         return -1;
     struct sigaction previous_action;
-    copy_signal_action(&previous_action, &saved->action);
-    int result = 0;
-    if (action) {
+    int result = sigaction(sig, NULL, &previous_action);
+    if (result == 0 && (previous_action.sa_flags & SA_SIGINFO) &&
+            previous_action.sa_sigaction == signal_handler && saved->valid)
+        copy_signal_action(&previous_action, &saved->action);
+    if (result == 0 && action) {
         const struct sigaction next_action = *action;
         struct sigaction runtime_action = {
             .sa_sigaction = signal_handler,
-            .sa_flags = SA_ONSTACK | SA_SIGINFO | (action->sa_flags & SA_RESTART)
+            .sa_flags = SA_ONSTACK | SA_SIGINFO |
+                (action->sa_flags & (SA_RESTART | SA_NOCLDSTOP | SA_NOCLDWAIT))
         };
         sigfillset(&runtime_action.sa_mask);
-        result = sigaction(sig, &runtime_action, NULL);
-        if (result == 0)
+        result = sigaction(sig, action->sa_handler == SIG_DFL || action->sa_handler == SIG_IGN
+                               ? &next_action : &runtime_action, NULL);
+        if (result == 0) {
             copy_signal_action(&saved->action, &next_action);
+            saved->valid = true;
+        }
     }
     if (result == 0 && old_action)
         *old_action = previous_action;
@@ -274,9 +386,6 @@ int sigaction__teapot_wrapper__(int sig, const struct sigaction *action,
 }
 
 teapot_signal_function signal__teapot_wrapper__(int sig, teapot_signal_function handler) {
-    struct saved_signal_action *saved = saved_action_for_signal(sig);
-    if (!saved || !saved->valid)
-        return signal(sig, handler);
     if (handler == SIG_ERR) {
         errno = EINVAL;
         return SIG_ERR;
@@ -313,37 +422,22 @@ static teapot_signal_function install_sysv_signal(int sig, teapot_signal_functio
 }
 
 teapot_signal_function __sysv_signal__teapot_wrapper__(int sig, teapot_signal_function handler) {
-    struct saved_signal_action *saved = saved_action_for_signal(sig);
-    if (!saved || !saved->valid)
-        return __sysv_signal(sig, handler);
     return install_sysv_signal(sig, handler);
 }
 
 teapot_signal_function sysv_signal__teapot_wrapper__(int sig, teapot_signal_function handler) {
-    struct saved_signal_action *saved = saved_action_for_signal(sig);
-    if (!saved || !saved->valid)
-        return sysv_signal(sig, handler);
     return install_sysv_signal(sig, handler);
 }
 
 teapot_signal_function bsd_signal__teapot_wrapper__(int sig, teapot_signal_function handler) {
-    struct saved_signal_action *saved = saved_action_for_signal(sig);
-    if (!saved || !saved->valid)
-        return bsd_signal(sig, handler);
     return signal__teapot_wrapper__(sig, handler);
 }
 
 teapot_signal_function ssignal__teapot_wrapper__(int sig, teapot_signal_function handler) {
-    struct saved_signal_action *saved = saved_action_for_signal(sig);
-    if (!saved || !saved->valid)
-        return ssignal(sig, handler);
     return signal__teapot_wrapper__(sig, handler);
 }
 
 teapot_signal_function sigset__teapot_wrapper__(int sig, teapot_signal_function handler) {
-    struct saved_signal_action *saved = saved_action_for_signal(sig);
-    if (!saved || !saved->valid)
-        return sigset(sig, handler);
 
     sigset_t set, previous_mask;
     struct sigaction previous;

@@ -58,3 +58,7 @@
 #error "lp64-pure requires the published default IMAC/Zicsr/Zifencei/Zicond baseline"
 #endif
 #endif
+
+#ifndef __ASSEMBLER__
+#define LIBCHECKPOINT_RESTORE_PATH __attribute__((noinline, section("teapot_restore")))
+#endif

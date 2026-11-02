@@ -242,7 +242,7 @@ restore_checkpoint_\name:
 	.cfi_endproc
 .endm
 
-	.text
+	.section teapot_restore,"ax",@progbits
 DEF_RESTORE_CHECKPOINT ROB_LEN, ROLLBACK_ROB_LEN
 DEF_RESTORE_CHECKPOINT SIGSEGV, ROLLBACK_SIGSEGV
 DEF_RESTORE_CHECKPOINT EXT_LIB, ROLLBACK_EXT_LIB
@@ -283,6 +283,7 @@ report_gadget_\type:
 	.cfi_endproc
 .endm
 
+	.text
 DEF_REPORT_GADGET_X64_PRESERVE KASPER_CACHE
 DEF_REPORT_GADGET_X64_PRESERVE KASPER_MDS
 DEF_REPORT_GADGET_X64_PRESERVE KASPER_PORT
@@ -432,6 +433,7 @@ DEF_REPORT_GADGET_X64_PRESERVE TARGET
 	.cfi_endproc
 .endm
 
+	.section teapot_checkpoint,"ax",@progbits
 DEF_MAKE_CHECKPOINT make_checkpoint_integer, 0
 DEF_MAKE_CHECKPOINT make_checkpoint_xmm, 1
 DEF_MAKE_CHECKPOINT make_checkpoint_x64, 2
@@ -440,6 +442,7 @@ DEF_MAKE_CHECKPOINT make_checkpoint_x64, 2
 	.globl make_checkpoint_df
 	.set make_checkpoint_df, make_checkpoint_x64_df
 
+	.section teapot_restore,"ax",@progbits
 	.globl	restore_checkpoint_registers
 	.p2align	4, 0x90
 	.type	restore_checkpoint_registers,@function
@@ -478,8 +481,12 @@ restore_checkpoint_registers:
 #endif
 
 	RESTORE_FLAGS_RAX_RBX_AND_JUMP %rax
+	.globl teapot_restore_registers_end
+teapot_restore_registers_end:
 .Lrestore_checkpoint_registers_end:
 	.size	restore_checkpoint_registers, .Lrestore_checkpoint_registers_end-restore_checkpoint_registers
 	.cfi_endproc
 
 	.section	.note.GNU-stack,"",@progbits
+
+#include "signal_resume.S"

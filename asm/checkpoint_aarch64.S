@@ -159,6 +159,8 @@
 	ldr	x17, [x16, #24]
 	LOAD_ADDR x16, checkpoint_target_metadata + \target_offset
 	ldr	x16, [x16]
+	.globl teapot_checkpoint_skip_jump
+teapot_checkpoint_skip_jump:
 	TRUSTED_CONTINUATION
 .endm
 
@@ -238,7 +240,7 @@ restore_checkpoint_\name:
 	.cfi_endproc
 .endm
 
-	.text
+	.section teapot_restore,"ax",%progbits
 DEF_RESTORE_CHECKPOINT ROB_LEN, ROLLBACK_ROB_LEN
 DEF_RESTORE_CHECKPOINT SIGSEGV, ROLLBACK_SIGSEGV
 DEF_RESTORE_CHECKPOINT EXT_LIB, ROLLBACK_EXT_LIB
@@ -307,12 +309,14 @@ report_gadget_aarch64_preserve_\type:
 	.cfi_endproc
 .endm
 
+	.text
 DEF_REPORT_GADGET_PRESERVE KASPER_CACHE
 DEF_REPORT_GADGET_PRESERVE KASPER_MDS
 DEF_REPORT_GADGET_PRESERVE KASPER_PORT
 DEF_REPORT_GADGET_PRESERVE KASPER_CACHE_STORE
 DEF_REPORT_GADGET_PRESERVE TARGET
 
+	.section teapot_checkpoint,"ax",%progbits
 	.globl	make_checkpoint_aarch64
 	.p2align	4
 	.type	make_checkpoint_aarch64,%function
@@ -452,6 +456,7 @@ make_checkpoint_aarch64:
 	.size	make_checkpoint_aarch64, .Lmake_checkpoint_end-make_checkpoint_aarch64
 	.cfi_endproc
 
+	.section teapot_restore,"ax",%progbits
 	.globl	restore_checkpoint_registers
 	.p2align	4
 	.type	restore_checkpoint_registers,%function
@@ -480,8 +485,12 @@ restore_checkpoint_registers:
 	LOAD_ADDR x0, checkpoint_target_metadata + CHECKPOINT_TARGET_RETURN_ADDR
 	str	x17, [x0]
 	RESTORE_FROM_CHECKPOINT x16
+	.globl teapot_restore_registers_end
+teapot_restore_registers_end:
 .Lrestore_checkpoint_registers_end:
 	.size	restore_checkpoint_registers, .Lrestore_checkpoint_registers_end-restore_checkpoint_registers
 	.cfi_endproc
 
 	.section	.note.GNU-stack,"",%progbits
+
+#include "signal_resume.S"

@@ -43,6 +43,7 @@ static void runtime_owned(int restart) {
 typedef teapot_signal_function (*installer)(int, teapot_signal_function);
 static void installer_test(installer wrapper, installer libc_entry, int flags, int self_mask) {
     reset();assert(wrapper(owned_signal, first) == SIG_DFL);runtime_owned(!!(flags & SA_RESTART));
+    if (owned_signal == SIGILL) { setup_signal_handler(); runtime_owned(!!(flags & SA_RESTART)); }
     struct saved_signal_action *saved = saved_action_for_signal(owned_signal);
     assert(saved && saved->valid && saved->action.sa_handler == first && saved->action.sa_flags == flags);
     for (int sig = 1; sig < NSIG; ++sig)
@@ -55,13 +56,15 @@ static void installer_test(installer wrapper, installer libc_entry, int flags, i
         assert(saved->action.sa_flags == 0);pid_t child = fork();assert(child >= 0);
         if (!child) { raise(owned_signal);_exit(99); }
         int status;assert(waitpid(child, &status, 0) == child);
-        assert(WIFSIGNALED(status) && WTERMSIG(status) == owned_signal);
+        if (owned_signal == SIGCHLD) assert(WIFEXITED(status) && WEXITSTATUS(status) == 99);
+        else assert(WIFSIGNALED(status) && WTERMSIG(status) == owned_signal);
     } else { raise(owned_signal);assert(calls == 2); }
     struct sigaction action = {.sa_handler = SIG_DFL}, raw, wrapped;
     assert(sigaction(SIGUSR1, &action, NULL) == 0);assert(libc_entry(SIGUSR1, first) == SIG_DFL);
     assert(sigaction(SIGUSR1, NULL, &raw) == 0);assert(sigaction(SIGUSR1, &action, NULL) == 0);
-    assert(wrapper(SIGUSR1, first) == SIG_DFL);assert(sigaction(SIGUSR1, NULL, &wrapped) == 0);
-    assert(raw.sa_handler == wrapped.sa_handler && raw.sa_flags == wrapped.sa_flags);
+    assert(wrapper(SIGUSR1, first) == SIG_DFL);assert(sigaction__teapot_wrapper__(SIGUSR1, NULL, &wrapped) == 0);
+    int visible_flags = SA_RESTART | SA_NODEFER | SA_RESETHAND | SA_SIGINFO | SA_NOCLDSTOP | SA_NOCLDWAIT;
+    assert(raw.sa_handler == wrapped.sa_handler && (raw.sa_flags & visible_flags) == (wrapped.sa_flags & visible_flags));
     for (int sig = 1; sig < NSIG; ++sig)
         assert(sigismember(&raw.sa_mask, sig) == sigismember(&wrapped.sa_mask, sig));
     assert(sigaction(SIGUSR1, &action, NULL) == 0);
@@ -83,7 +86,9 @@ static void holds(void) {
     assert(sigset__teapot_wrapper__(owned_signal, first) == second);
     assert(sigset__teapot_wrapper__(owned_signal, SIG_HOLD) == first);
     assert(sigset__teapot_wrapper__(owned_signal, SIG_IGN) == SIG_HOLD);
-    assert(sigset__teapot_wrapper__(owned_signal, SIG_DFL) == SIG_IGN);runtime_owned(0);
+    assert(sigset__teapot_wrapper__(owned_signal, SIG_DFL) == SIG_IGN);
+    struct sigaction direct;
+    assert(sigaction(owned_signal, NULL, &direct) == 0 && direct.sa_handler == SIG_DFL);
     assert(sigset__teapot_wrapper__(SIGUSR1, first) == SIG_DFL);
     assert(sigset__teapot_wrapper__(SIGUSR1, SIG_HOLD) == first);
     assert(sigset__teapot_wrapper__(SIGUSR1, SIG_HOLD) == SIG_HOLD);
@@ -95,7 +100,7 @@ int main(void) {
 #ifdef SA_INTERRUPT
     flags |= SA_INTERRUPT;
 #endif
-    const int owned[] = {SIGILL,SIGSEGV,SIGFPE,SIGBUS};
+    const int owned[] = {SIGILL,SIGSEGV,SIGFPE,SIGBUS,SIGALRM,SIGUSR2,SIGCHLD};
     for (unsigned i=0;i<sizeof(owned)/sizeof(owned[0]);++i) {
     owned_signal=owned[i];
     installer_test(__sysv_signal__teapot_wrapper__, __sysv_signal, flags, 0);

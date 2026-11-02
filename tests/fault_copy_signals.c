@@ -93,6 +93,18 @@ int main(void) {
             if(cases[i].copied) {
                 assert(seen_active==(state!=0) && seen_replay==(state==2));
                 assert(*context_pc(&context)==(uintptr_t)restore_checkpoint_SIGSEGV);
+            } else if(state && (info.si_code <= 0
+#ifdef SEGV_MTEAERR
+                    || (cases[i].signal == SIGSEGV && info.si_code == SEGV_MTEAERR)
+#endif
+#ifdef BUS_MCEERR_AO
+                    || (cases[i].signal == SIGBUS && info.si_code == BUS_MCEERR_AO)
+#endif
+                    )) {
+                assert(!forward_calls && *context_pc(&context) == 0x1000);
+                assert(sigismember(&context.uc_sigmask, cases[i].signal) == 1);
+                assert(teapot_pending_signals & (UINT64_C(1) << (cases[i].signal - 1)));
+                teapot_pending_signals = 0;
             } else if(info.si_code>0 && state) {
                 assert(!forward_calls);
                 assert(*context_pc(&context)==(state==2 ? (uintptr_t)restore_checkpoint_memlog :
@@ -100,5 +112,5 @@ int main(void) {
             } else assert(forward_calls==1 && *context_pc(&context)==0x1000);
             ++checks;
         }
-    printf("copied-load routing matrix: %u checks PASS; async/other signals retain baseline\n",checks);
+    printf("copied-load routing matrix: %u checks PASS; async signals deferred; synchronous recovery unchanged\n",checks);
 }

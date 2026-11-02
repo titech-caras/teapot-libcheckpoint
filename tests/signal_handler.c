@@ -277,15 +277,26 @@ static void check_user_fault_signals(void) {
                 sigemptyset(&action.sa_mask);
                 assert(sigaction__teapot_wrapper__(signals[i], &action, NULL) == 0);
                 sig_atomic_t before = application_calls;
-                expected_signal_code = SI_TKILL;
-                assert(raise(signals[i]) == 0);
-                expected_signal_code = SI_USER;
-                assert(kill(getpid(), signals[i]) == 0);
-                expected_signal_code = SI_QUEUE;
-                assert(sigqueue(getpid(), signals[i], (union sigval){.sival_int = 1234}) == 0);
-                assert(application_calls == before + 3);
-                assert(checkpoint_cnt == depth && in_restore_memlog == replay);
-
+                const int codes[] = {SI_TKILL, SI_USER, SI_QUEUE};
+                for (unsigned kind = 0; kind < 3; ++kind) {
+                    expected_signal_code = codes[kind];
+                    if (kind == 0) assert(raise(signals[i]) == 0);
+                    if (kind == 1) assert(kill(getpid(), signals[i]) == 0);
+                    if (kind == 2) assert(sigqueue(getpid(), signals[i], (union sigval){.sival_int = 1234}) == 0);
+                    assert(application_calls == before + kind + !(depth || replay));
+                    assert(checkpoint_cnt == depth && in_restore_memlog == replay);
+                    if (depth || replay) {
+                        /* This isolated fixture stubs rollback assembly. The
+                         * real checkpoint regression covers its resume stub. */
+                        checkpoint_cnt = in_restore_memlog = 0;
+                        sigset_t held;
+                        sigemptyset(&held); sigaddset(&held, signals[i]);
+                        teapot_pending_signals = 0;
+                        assert(sigprocmask(SIG_UNBLOCK, &held, NULL) == 0);
+                        assert(application_calls == before + kind + 1);
+                        checkpoint_cnt = depth; in_restore_memlog = replay;
+                    }
+                }
                 /* SIG_IGN is an application disposition even in replay. */
                 assert(signal__teapot_wrapper__(signals[i], SIG_IGN) != SIG_ERR);
                 assert(raise(signals[i]) == 0);

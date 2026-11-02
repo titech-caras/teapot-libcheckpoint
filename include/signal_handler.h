@@ -1,6 +1,12 @@
 #pragma once
 
 #include <signal.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+extern uint64_t teapot_pending_signals;
+void teapot_signal_prepare_resume(uint64_t *target);
+bool teapot_signal_runtime_busy(void *context);
 
 /* A PURE kernel SIGILL is an unsupported instruction, never a rollback.
  * Distinguish this fatal exit from successful speculative recovery. */

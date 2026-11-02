@@ -220,6 +220,8 @@
 	ld	t6, RISCV_BOOT_X31(t0)
 	LOAD_ADDR_OFFSET t0, checkpoint_target_metadata, \target_offset
 	ld	t0, 0(t0)
+	.globl teapot_checkpoint_skip_jump
+teapot_checkpoint_skip_jump:
 	jr	t0
 .endm
 
@@ -325,12 +327,13 @@ restore_checkpoint_\name:
 	.cfi_endproc
 .endm
 
-	.text
+	.section teapot_restore,"ax",@progbits
 DEF_RESTORE_CHECKPOINT ROB_LEN, ROLLBACK_ROB_LEN
 DEF_RESTORE_CHECKPOINT SIGSEGV, ROLLBACK_SIGSEGV
 DEF_RESTORE_CHECKPOINT EXT_LIB, ROLLBACK_EXT_LIB
 DEF_RESTORE_CHECKPOINT MALFORMED_INDIRECT_BR, ROLLBACK_MALFORMED_INDIRECT_BR
 
+	.section teapot_checkpoint,"ax",@progbits
 	.globl	make_checkpoint_riscv64
 	.p2align	2
 	.type	make_checkpoint_riscv64,@function
@@ -488,6 +491,7 @@ make_checkpoint_riscv64:
 	.size	make_checkpoint_riscv64, .Lmake_checkpoint_end-make_checkpoint_riscv64
 	.cfi_endproc
 
+	.section teapot_restore,"ax",@progbits
 	.globl	restore_checkpoint_registers
 	.p2align	2
 	.type	restore_checkpoint_registers,@function
@@ -518,8 +522,12 @@ restore_checkpoint_registers:
 	LOAD_ADDR_OFFSET t2, checkpoint_target_metadata, CHECKPOINT_TARGET_RETURN_ADDR
 	sd	t1, 0(t2)
 	RESTORE_FROM_CHECKPOINT t0
+	.globl teapot_restore_registers_end
+teapot_restore_registers_end:
 .Lrestore_checkpoint_registers_end:
 	.size	restore_checkpoint_registers, .Lrestore_checkpoint_registers_end-restore_checkpoint_registers
 	.cfi_endproc
 
 	.section	.note.GNU-stack,"",@progbits
+
+#include "signal_resume.S"

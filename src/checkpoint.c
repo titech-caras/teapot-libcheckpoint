@@ -45,7 +45,6 @@
 #endif
 #endif
 
-#define LIBCHECKPOINT_RESTORE_PATH __attribute__((noinline))
 
 extern char __start_teapot_protected[];
 extern char __stop_teapot_protected[];
@@ -741,6 +740,8 @@ LIBCHECKPOINT_RESTORE_PATH __attribute__((noreturn)) void restore_checkpoint_aft
 #ifdef ENABLE_FAULT_PUBLISHING
     teapot_fault_publish_pending();
 #endif
+    if (checkpoint_cnt == 0 && teapot_pending_signals)
+        teapot_signal_prepare_resume(&checkpoint_metadata[0].return_address);
     restore_checkpoint_registers();
 }
 
