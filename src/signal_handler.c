@@ -112,6 +112,29 @@ static void invoke_saved_signal_action(int sig, siginfo_t *info, void *ucontext)
                 sigaddset(&mask, number);
         if (!(action->sa_flags & SA_NODEFER))
             sigaddset(&mask, sig);
+#ifndef DISABLE_DIFT_RUNTIME
+        /* sigreturn restores the interrupted registers, but not their shadow.
+         * Keep a per-handler snapshot while signals are blocked, including a
+         * queue that may have been interrupted midway through application.
+         * Volatile word accesses avoid ASan-intercepted copies of protected
+         * storage, as in restore_checkpoint_after_memlog. */
+        typedef uint64_t tag_word_t __attribute__((may_alias));
+        _Static_assert(DIFT_REG_TAGS_SIZE % sizeof(tag_word_t) == 0, "whole tag words");
+        _Static_assert(sizeof(dift_reg_queue_pending) == sizeof(tag_word_t), "whole pending word");
+        tag_word_t saved_tags[DIFT_REG_TAGS_SIZE / sizeof(tag_word_t)];
+        tag_word_t saved_queued[DIFT_REG_TAGS_SIZE / sizeof(tag_word_t)];
+        volatile tag_word_t *tags = (volatile tag_word_t *)dift_reg_tags;
+        volatile tag_word_t *queued = (volatile tag_word_t *)dift_reg_queued_tags;
+        volatile tag_word_t *pending = (volatile tag_word_t *)dift_reg_queue_pending;
+        for (size_t i = 0; i < DIFT_REG_TAGS_SIZE / sizeof(tag_word_t); ++i) {
+            saved_tags[i] = tags[i];
+            saved_queued[i] = queued[i];
+            queued[i] = 0;
+        }
+        tag_word_t saved_pending = *pending;
+        /* The handler must not consume the interrupted instruction's queue. */
+        *pending = 0;
+#endif
         uintptr_t landing_register = checkpoint_target_metadata[CHECKPOINT_TARGET_SCRATCH_REG_ADDR / 8];
         sigprocmask(SIG_SETMASK, &mask, &previous);
         if (action->sa_flags & SA_SIGINFO)
@@ -120,6 +143,13 @@ static void invoke_saved_signal_action(int sig, siginfo_t *info, void *ucontext)
             action->sa_handler(sig);
         sigprocmask(SIG_SETMASK, &previous, NULL);
         checkpoint_target_metadata[CHECKPOINT_TARGET_SCRATCH_REG_ADDR / 8] = landing_register;
+#ifndef DISABLE_DIFT_RUNTIME
+        for (size_t i = 0; i < DIFT_REG_TAGS_SIZE / sizeof(tag_word_t); ++i) {
+            tags[i] = saved_tags[i];
+            queued[i] = saved_queued[i];
+        }
+        *pending = saved_pending;
+#endif
     }
 }
 

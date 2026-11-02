@@ -25,6 +25,63 @@ static uint32_t branch_count;
 static int mode;
 static void *handler_checkpoint_stack;
 int test_signal_at_entry, test_signal_at_restore, test_signal_pid;
+#ifndef DISABLE_DIFT_RUNTIME
+static unsigned char tagged_memory;
+static void set_register_shadow(unsigned tags, unsigned queued, unsigned pending) {
+    for (unsigned i = 0; i < DIFT_REG_TAGS_SIZE; ++i) {
+        dift_reg_tags[i] = tags + i;
+        dift_reg_queued_tags[i] = queued ? queued + i : 0;
+    }
+    dift_reg_queue_pending[0] = pending;
+}
+static void on_tags(int sig) {
+    assert(sig == SIGUSR1 && checkpoint_cnt == 0 && !in_restore_memlog);
+    /* Pending work belongs to the interrupted instruction, not this handler. */
+    assert(dift_reg_queue_pending[0] == 0);
+    for (unsigned i = 0; i < DIFT_REG_TAGS_SIZE; ++i)
+        assert(dift_reg_queued_tags[i] == 0);
+    set_register_shadow(64, 128, 1);
+    DIFT_MEM_TAG(&tagged_memory) = TAG_SECRET_INDIRECT;
+    if (mode == 7) {
+        assert(checkpoint_rollback_probe(handler_checkpoint_stack) == 1);
+        for (unsigned i = 0; i < DIFT_REG_TAGS_SIZE; ++i) {
+            assert(dift_reg_tags[i] == 64 + i);
+            assert(dift_reg_queued_tags[i] == 0);
+        }
+        assert(dift_reg_queue_pending[0] == 0);
+        set_register_shadow(96, 160, 1);
+    }
+    ++calls;
+}
+static void on_tags_info(int sig, siginfo_t *info, void *context) {
+    assert(info->si_code == SI_TKILL && !teapot_signal_runtime_busy(context));
+    on_tags(sig);
+}
+static void check_signal_tags(void) {
+    for (unsigned siginfo = 0; siginfo < 2; ++siginfo) {
+        struct sigaction action = {.sa_handler = on_tags};
+        if (siginfo) {
+            action.sa_sigaction = on_tags_info;
+            action.sa_flags = SA_SIGINFO;
+        }
+        assert(sigaction__teapot_wrapper__(SIGUSR1, &action, NULL) == 0);
+        /* Empty, pending, and partially consumed queues (pending already zero). */
+        for (unsigned queue = 0; queue < 3; ++queue) {
+            set_register_shadow(1, queue ? 192 : 0, queue == 1);
+            DIFT_MEM_TAG(&tagged_memory) = TAG_SECRET;
+            assert(raise(SIGUSR1) == 0);
+            for (unsigned i = 0; i < DIFT_REG_TAGS_SIZE; ++i) {
+                assert(dift_reg_tags[i] == 1 + i);
+                assert(dift_reg_queued_tags[i] == (queue ? 192 + i : 0));
+            }
+            assert(dift_reg_queue_pending[0] == (queue == 1));
+            assert(DIFT_MEM_TAG(&tagged_memory) == TAG_SECRET_INDIRECT);
+        }
+    }
+    assert(calls == 6);
+    puts("PASS: interrupted register tags and queue restored; handler memory tags retained");
+}
+#endif
 static void on_user(int sig, siginfo_t *info, void *context) {
     assert(!teapot_signal_runtime_busy(context));
     assert(checkpoint_cnt == 0 && !in_restore_memlog);
@@ -123,6 +180,12 @@ static void on_alarm(int sig, siginfo_t *info, void *context) {
     done = 1;
 }
 void checkpoint_test_transient_body(void) {
+#ifndef DISABLE_DIFT_RUNTIME
+    if (mode == 7) {
+        set_register_shadow(128, 64, 1);
+        restore_checkpoint_ROB_LEN();
+    }
+#endif
     if (mode == 1) {
         assert(kill(getpid(), SIGSEGV) == 0);
         assert(sigqueue(getpid(), SIGUSR1, (union sigval){.sival_int = 1234}) == 0);
@@ -155,6 +218,12 @@ int main(int argc, char **argv) {
     setup_signal_handler();
     handler_checkpoint_stack = stack_top;
     test_signal_pid = getpid();
+#ifndef DISABLE_DIFT_RUNTIME
+    if (!strcmp(argv[1], "tags") || !strcmp(argv[1], "tags-checkpoint")) {
+        mode = !strcmp(argv[1], "tags") ? 6 : 7;
+        check_signal_tags(); return 0;
+    }
+#endif
     if (!strcmp(argv[1], "registers")) { mode = 5; check_registers(); return 0; }
     if (strcmp(argv[1], "timer")) {
         if (!strcmp(argv[1], "restart")) {

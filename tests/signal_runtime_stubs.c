@@ -2,6 +2,14 @@
 #include "checkpoint.h"
 checkpoint_metadata_t checkpoint_metadata[MAX_CHECKPOINTS];
 uintptr_t checkpoint_target_metadata[CHECKPOINT_TARGET_METADATA_SIZE / 8];
+#ifndef DISABLE_DIFT_RUNTIME
+dift_tag_t dift_reg_tags[DIFT_REG_TAGS_SIZE] LIBCHECKPOINT_PROTECTED_SECTION_ALIGNED(16);
+dift_tag_t dift_reg_queued_tags[DIFT_REG_TAGS_SIZE] LIBCHECKPOINT_PROTECTED_SECTION_ALIGNED(16);
+uint8_t dift_reg_queue_pending[8] LIBCHECKPOINT_PROTECTED_SECTION_ALIGNED(8);
+LIBCHECKPOINT_ASSERT_PROTECTED(dift_reg_tags);
+LIBCHECKPOINT_ASSERT_PROTECTED(dift_reg_queued_tags);
+LIBCHECKPOINT_ASSERT_PROTECTED(dift_reg_queue_pending);
+#endif
 void restore_checkpoint_registers(void) { __builtin_trap(); }
 void teapot_signal_resume(void) { __builtin_trap(); }
 __asm__(".pushsection teapot_checkpoint,\"ax\"\n.popsection\n"
