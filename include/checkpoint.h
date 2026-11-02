@@ -32,6 +32,11 @@
 #define SCRATCHPAD_SIZE 1048576
 #define SCRATCHPAD_FIRST_SPILL_OFFSET (SCRATCHPAD_SIZE / 2)
 #define RISCV64_ORIGINAL_TP_OFFSET (SCRATCHPAD_SIZE - 32768)
+/* Teapot's ScratchpadSlots: x64 REP DIFT state (six words) and the text-DIFT
+ * register save area (one page). Forwarded signal handlers preserve both. */
+#define X64_REP_STATE_OFFSET (SCRATCHPAD_FIRST_SPILL_OFFSET + 8192)
+#define X64_REP_STATE_SIZE 48
+#define TEXT_DIFT_LLVM_SCRATCH_SAVE_OFFSET (SCRATCHPAD_SIZE - 61440)
 
 #if defined(SPECFUZZ_PRIORITIZED_SIMULATION) || defined(BRANCH_FULL_EXEC_COUNT)
 #define USE_BRANCH_EXEC_COUNT

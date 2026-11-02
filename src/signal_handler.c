@@ -85,6 +85,33 @@ static bool signal_can_refault(int sig, const siginfo_t *info) {
     return true;
 }
 
+/* Rewritten code outside the busy runtime keeps live values in these global
+ * slots across instruction boundaries, and a rewritten handler's own patches
+ * reuse them: checkpoint-site arguments, x64's no-scratch rax at offset 0,
+ * every ISA's wrapper spills and RV64's landing-pad slots from the first spill
+ * offset through x64's REP DIFT state, and the text-DIFT register saves. */
+static const struct { size_t offset, size; } forwarded_scratch_slots[] = {
+    {0, 64},
+    {SCRATCHPAD_FIRST_SPILL_OFFSET,
+     X64_REP_STATE_OFFSET + X64_REP_STATE_SIZE - SCRATCHPAD_FIRST_SPILL_OFFSET},
+    {TEXT_DIFT_LLVM_SCRATCH_SAVE_OFFSET, 4096},
+};
+#define FORWARDED_SLOT_WORDS ((CHECKPOINT_TARGET_METADATA_SIZE + 64 + \
+    X64_REP_STATE_OFFSET + X64_REP_STATE_SIZE - SCRATCHPAD_FIRST_SPILL_OFFSET + 4096) / 8)
+
+/* Volatile word accesses, as for the register tags below: no libc copies. */
+static void exchange_forwarded_slots(uint64_t *saved, bool restore) {
+    typedef uint64_t slot_word_t __attribute__((may_alias));
+    volatile slot_word_t *word = (volatile slot_word_t *)checkpoint_target_metadata;
+    for (size_t i = 0; i < CHECKPOINT_TARGET_METADATA_SIZE / 8; ++i, ++saved)
+        if (restore) word[i] = *saved; else *saved = word[i];
+    for (size_t r = 0; r < sizeof(forwarded_scratch_slots) / sizeof(forwarded_scratch_slots[0]); ++r) {
+        word = (volatile slot_word_t *)(scratchpad + forwarded_scratch_slots[r].offset);
+        for (size_t i = 0; i < forwarded_scratch_slots[r].size / 8; ++i, ++saved)
+            if (restore) word[i] = *saved; else *saved = word[i];
+    }
+}
+
 static void invoke_saved_signal_action(int sig, siginfo_t *info, void *ucontext) {
     struct saved_signal_action *saved = saved_action_for_signal(sig);
     const struct sigaction default_action = { .sa_handler = SIG_DFL };
@@ -135,14 +162,15 @@ static void invoke_saved_signal_action(int sig, siginfo_t *info, void *ucontext)
         /* The handler must not consume the interrupted instruction's queue. */
         *pending = 0;
 #endif
-        uintptr_t landing_register = checkpoint_target_metadata[CHECKPOINT_TARGET_SCRATCH_REG_ADDR / 8];
+        uint64_t saved_slots[FORWARDED_SLOT_WORDS];
+        exchange_forwarded_slots(saved_slots, false);
         sigprocmask(SIG_SETMASK, &mask, &previous);
         if (action->sa_flags & SA_SIGINFO)
             action->sa_sigaction(sig, info, ucontext);
         else
             action->sa_handler(sig);
         sigprocmask(SIG_SETMASK, &previous, NULL);
-        checkpoint_target_metadata[CHECKPOINT_TARGET_SCRATCH_REG_ADDR / 8] = landing_register;
+        exchange_forwarded_slots(saved_slots, true);
 #ifndef DISABLE_DIFT_RUNTIME
         for (size_t i = 0; i < DIFT_REG_TAGS_SIZE / sizeof(tag_word_t); ++i) {
             tags[i] = saved_tags[i];
@@ -286,6 +314,16 @@ static void restart_restore_checkpoint_memlog(void *ucontext) {
 }
 
 void signal_handler(int sig, siginfo_t *info, void *ucontext) {
+#if defined(__riscv) && __riscv_xlen == 64
+    /* RV64 spills and landing pads point tp into the scratchpad for a few
+     * instructions. This handler, the program's and libc need the thread's
+     * own tp for errno and TLS; sigreturn restores the interrupted one. */
+    uintptr_t thread_pointer;
+    asm volatile("mv %0, tp" : "=r"(thread_pointer));
+    if (thread_pointer - (uintptr_t)scratchpad < SCRATCHPAD_SIZE)
+        asm volatile("mv tp, %0" :: "r"(*(volatile uint64_t *)(scratchpad + RISCV64_ORIGINAL_TP_OFFSET))
+                     : "memory");
+#endif
     uintptr_t *pc = signal_program_counter(ucontext);
     /* A signal number alone does not identify a speculative fault. kill(),
      * raise() and sigqueue() deliver application notifications with nonpositive
@@ -514,7 +552,7 @@ void setup_signal_handler() {
     // Keep this independent of application/scratch stacks and guard both ends.
     stack_t *const ss = &signal_stack;
     if (ss->ss_sp == NULL) {
-        const size_t handler_budget = 64 * 1024;
+        const size_t handler_budget = 64 * 1024 + FORWARDED_SLOT_WORDS * 8;
         size_t frame_size = getauxval(AT_MINSIGSTKSZ);
         if (frame_size < (size_t)SIGSTKSZ)
             frame_size = (size_t)SIGSTKSZ;
@@ -524,16 +562,25 @@ void setup_signal_handler() {
             abort();
         size_t size = ((frame_size + handler_budget + page_size - 1) /
                        page_size) * page_size;
-        void *mapping = mmap(NULL, size + 2 * page_size, PROT_NONE,
-                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        /* Every handler runs here. On AArch64 its rewritten code also spills
+         * to sp - AARCH64_SHADOW_STACK_SIZE, so reserve that window with it. */
+#if defined(__aarch64__)
+        const size_t window = AARCH64_SHADOW_STACK_SIZE;
+#else
+        const size_t window = 0;
+#endif
+        const size_t span = window + size + 2 * page_size;
+        char *mapping = mmap(NULL, span, PROT_NONE,
+                             MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
         if (mapping == MAP_FAILED) {
             perror("mmap signal stack");
             abort();
         }
-        void *stack = (char *)mapping + page_size;
-        if (mprotect(stack, size, PROT_READ | PROT_WRITE) != 0) {
+        char *stack = mapping + page_size + window;
+        if (mprotect(stack, size, PROT_READ | PROT_WRITE) != 0 ||
+                (window && mprotect(stack - window, size, PROT_READ | PROT_WRITE) != 0)) {
             perror("mprotect signal stack");
-            munmap(mapping, size + 2 * page_size);
+            munmap(mapping, span);
             abort();
         }
         ss->ss_sp = stack;

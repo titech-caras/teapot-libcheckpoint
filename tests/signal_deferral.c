@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #include <sys/time.h>
 #include <ucontext.h>
 #include <unistd.h>
@@ -202,6 +203,91 @@ void checkpoint_test_transient_body(void) {
     }
     restore_checkpoint_ROB_LEN();
 }
+/* A rewritten handler's own sites and spills reuse the global slots that the
+ * interrupted code may hold live; forwarding must hand them back unchanged. */
+static const struct { size_t offset, size; } test_slots[] = {
+    {0, 64},
+    {SCRATCHPAD_FIRST_SPILL_OFFSET, X64_REP_STATE_OFFSET + X64_REP_STATE_SIZE - SCRATCHPAD_FIRST_SPILL_OFFSET},
+    {TEXT_DIFT_LLVM_SCRATCH_SAVE_OFFSET, 4096},
+};
+static void fill_slots(uint64_t base) {
+    for (size_t i = 0; i < CHECKPOINT_TARGET_METADATA_SIZE / 8; ++i)
+        checkpoint_target_metadata[i] = base + i;
+    for (size_t r = 0; r < sizeof(test_slots) / sizeof(test_slots[0]); ++r)
+        for (size_t i = 0; i < test_slots[r].size / 8; ++i)
+            ((uint64_t *)(scratchpad + test_slots[r].offset))[i] = base + (r + 1) * 0x10000 + i;
+}
+static void on_slots(int sig) { assert(sig == SIGUSR1); fill_slots(0xbad00000); ++calls; }
+static void check_slots(void) {
+    struct sigaction action = {.sa_handler = on_slots};
+    assert(sigaction__teapot_wrapper__(SIGUSR1, &action, NULL) == 0);
+    fill_slots(0x100000);
+    assert(raise(SIGUSR1) == 0);
+    assert(calls == 1);
+    for (size_t i = 0; i < CHECKPOINT_TARGET_METADATA_SIZE / 8; ++i)
+        assert(checkpoint_target_metadata[i] == 0x100000 + i);
+    for (size_t r = 0; r < sizeof(test_slots) / sizeof(test_slots[0]); ++r)
+        for (size_t i = 0; i < test_slots[r].size / 8; ++i)
+            assert(((uint64_t *)(scratchpad + test_slots[r].offset))[i] == 0x100000 + (r + 1) * 0x10000 + i);
+    puts("PASS: checkpoint-site arguments and scratch slots restored after the handler");
+}
+#if defined(__aarch64__)
+/* Forwarded handlers run on the runtime's alternate stack. Rewritten AArch64
+ * code spills to sp - AARCH64_SHADOW_STACK_SIZE, which the runtime must own. */
+static void on_altstack(int sig) {
+    stack_t ss;
+    assert(sig == SIGUSR1 && sigaltstack(NULL, &ss) == 0 && (ss.ss_flags & SS_ONSTACK));
+    uintptr_t sp = ((uintptr_t)__builtin_frame_address(0) - 1024) & ~(uintptr_t)15;
+    assert(sp - (uintptr_t)ss.ss_sp < ss.ss_size);
+    /* That window is a mapping of its own beside this stack, not whatever
+     * else happens to lie 8 MiB below it (under QEMU, another mapping does). */
+    uintptr_t window = (uintptr_t)ss.ss_sp - AARCH64_SHADOW_STACK_SIZE, start = 0, end = 0;
+    FILE *maps = fopen("/proc/self/maps", "r");
+    assert(maps);
+    unsigned long long low, high;
+    while (fscanf(maps, "%llx-%llx%*[^\n]", &low, &high) == 2)
+        if (low <= window && window < high) { start = low; end = high; break; }
+    fclose(maps);
+    assert(start >= window - 4096 && end >= window + ss.ss_size && end <= (uintptr_t)ss.ss_sp);
+    /* The real entry on this stack reads and writes that window. */
+    assert(checkpoint_rollback_probe((void *)sp) == 1);
+    ++calls;
+}
+static void check_altstack(void) {
+    struct sigaction action = {.sa_handler = on_altstack};
+    assert(sigaction__teapot_wrapper__(SIGUSR1, &action, NULL) == 0);
+    assert(raise(SIGUSR1) == 0);
+    assert(calls == 1);
+    puts("PASS: handler checkpoint on the alternate stack uses a runtime-owned window");
+}
+#endif
+#if defined(__riscv) && __riscv_xlen == 64
+static __thread volatile int tls_marker = 0x5a5a;
+static void on_tp(int sig) {
+    assert(sig == SIGUSR1 && tls_marker == 0x5a5a);
+    errno = EINTR;
+    ++calls;
+}
+static void check_thread_pointer(void) {
+    struct sigaction action = {.sa_handler = on_tp};
+    assert(sigaction__teapot_wrapper__(SIGUSR1, &action, NULL) == 0);
+    uintptr_t tp;
+    asm volatile("mv %0, tp" : "=r"(tp));
+    *(uint64_t *)(scratchpad + RISCV64_ORIGINAL_TP_OFFSET) = tp;
+    /* Borrow tp like an RV64 spill; the signal arrives as tgkill returns. */
+    register long a0 asm("a0") = getpid();
+    register long a1 asm("a1") = gettid();
+    register long a2 asm("a2") = SIGUSR1;
+    register long a7 asm("a7") = SYS_tgkill;
+    asm volatile("mv t2, tp\n"
+                 "lla tp, scratchpad + " STR(SCRATCHPAD_FIRST_SPILL_OFFSET) "\n"
+                 "ecall\n"
+                 "mv tp, t2"
+                 : "+r"(a0) : "r"(a1), "r"(a2), "r"(a7) : "t2", "memory");
+    assert(a0 == 0 && calls == 1 && tls_marker == 0x5a5a);
+    puts("PASS: handler interrupting a borrowed tp sees the thread's own TLS");
+}
+#endif
 int main(int argc, char **argv) {
     assert(argc == 2);
     void *stack_top = NULL;
@@ -225,6 +311,13 @@ int main(int argc, char **argv) {
     }
 #endif
     if (!strcmp(argv[1], "registers")) { mode = 5; check_registers(); return 0; }
+    if (!strcmp(argv[1], "slots")) { check_slots(); return 0; }
+#if defined(__aarch64__)
+    if (!strcmp(argv[1], "altstack")) { check_altstack(); return 0; }
+#endif
+#if defined(__riscv) && __riscv_xlen == 64
+    if (!strcmp(argv[1], "tp")) { check_thread_pointer(); return 0; }
+#endif
     if (strcmp(argv[1], "timer")) {
         if (!strcmp(argv[1], "restart")) {
             mode = 4; check_restart(); check_child_flags();
