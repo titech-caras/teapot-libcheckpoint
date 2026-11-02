@@ -314,11 +314,17 @@ void signal_handler(int sig, siginfo_t *info, void *ucontext) {
 #endif
         *pc = (uintptr_t)&restore_checkpoint_SIGSEGV;
     } else {
-        /* The interrupted code may hold stdio/locale locks. Keep forwarding
-         * diagnostics async-signal-safe and preserve the application's errno. */
+        /* Keep the diagnostic for the original fault signal numbers, including
+         * kill/raise notifications. Other application signals forward silently.
+         * The interrupted code may hold stdio/locale locks; preserve errno. */
         static const char message[] = "Teapot: forwarding application signal\n";
         int interrupted_errno = errno;
-        (void)write(STDERR_FILENO, message, sizeof(message) - 1);
+        if (sig == SIGSEGV || sig == SIGILL || sig == SIGFPE || sig == SIGBUS
+#ifdef TEAPOT_EXPERIMENTAL_AARCH64_BTI
+                || sig == SIGTRAP
+#endif
+        )
+            (void)write(STDERR_FILENO, message, sizeof(message) - 1);
         errno = interrupted_errno;
         if (has_handler)
             assert(!teapot_signal_runtime_busy(ucontext));
