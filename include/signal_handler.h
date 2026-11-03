@@ -24,3 +24,4 @@ teapot_signal_function sysv_signal__teapot_wrapper__(int sig, teapot_signal_func
 teapot_signal_function bsd_signal__teapot_wrapper__(int sig, teapot_signal_function handler);
 teapot_signal_function ssignal__teapot_wrapper__(int sig, teapot_signal_function handler);
 teapot_signal_function sigset__teapot_wrapper__(int sig, teapot_signal_function handler);
+int sigaltstack__teapot_wrapper__(const stack_t *stack, stack_t *old_stack);

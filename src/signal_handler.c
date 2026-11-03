@@ -29,6 +29,10 @@ extern bool teapot_aarch64_pac_signal(int, siginfo_t *, void *) __attribute__((w
 #ifndef AT_MINSIGSTKSZ
 #define AT_MINSIGSTKSZ 51
 #endif
+// glibc leaves this Linux sigaltstack flag to <linux/signal.h>.
+#ifndef SS_AUTODISARM
+#define SS_AUTODISARM (1U << 31)
+#endif
 
 extern uintptr_t checkpoint_target_metadata[];
 
@@ -603,4 +607,45 @@ void setup_signal_handler() {
     install_signal_handler(SIGTRAP, &sa);
 #endif
 
+}
+
+/* The application's own alternate stack, as sigaltstack reports it back.
+ * Handlers keep running on signal_stack: it has room for forwarding and, on
+ * AArch64, the spill window below it that rewritten handler code uses. */
+static stack_t application_signal_stack LIBCHECKPOINT_PROTECTED_SECTION = { .ss_flags = SS_DISABLE };
+LIBCHECKPOINT_ASSERT_PROTECTED(application_signal_stack);
+
+int sigaltstack__teapot_wrapper__(const stack_t *stack, stack_t *old_stack) {
+    sigset_t all, previous_mask;
+    sigfillset(&all);
+    if (sigprocmask(SIG_BLOCK, &all, &previous_mask) != 0)
+        return -1;
+    /* Let the kernel validate the request (EINVAL, ENOMEM, or EPERM while a
+     * handler runs on the alternate stack), then put the runtime's back. With
+     * every signal blocked, nothing runs on the application's in between. */
+    stack_t requested = {0}, kernel_old;
+    if (stack)
+        requested = *stack;
+    int result = sigaltstack(stack ? &requested : NULL, &kernel_old);
+    if (result == 0 && stack && signal_stack.ss_sp && sigaltstack(&signal_stack, NULL) != 0)
+        abort();
+    if (result == 0 && old_stack) {
+        /* Field by field: the record is poisoned like other protected state. */
+        old_stack->ss_sp = application_signal_stack.ss_sp;
+        old_stack->ss_size = application_signal_stack.ss_size;
+        old_stack->ss_flags = application_signal_stack.ss_flags;
+        // A handler runs on the runtime's stack in place of the application's.
+        if (!(old_stack->ss_flags & SS_DISABLE) && (kernel_old.ss_flags & SS_ONSTACK))
+            old_stack->ss_flags |= SS_ONSTACK;
+    }
+    if (result == 0 && stack) {
+        const bool disable = (requested.ss_flags & ~SS_AUTODISARM) == SS_DISABLE;
+        application_signal_stack.ss_sp = disable ? NULL : requested.ss_sp;
+        application_signal_stack.ss_size = disable ? 0 : requested.ss_size;
+        application_signal_stack.ss_flags = (disable ? SS_DISABLE : 0) | (requested.ss_flags & SS_AUTODISARM);
+    }
+    const int saved_errno = errno;
+    sigprocmask(SIG_SETMASK, &previous_mask, NULL);
+    errno = saved_errno;
+    return result;
 }

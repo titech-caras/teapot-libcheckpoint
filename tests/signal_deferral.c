@@ -261,6 +261,52 @@ static void check_altstack(void) {
     puts("PASS: handler checkpoint on the alternate stack uses a runtime-owned window");
 }
 #endif
+/* An application stack of 8 KiB (glibc's old SIGSTKSZ) above a guard page.
+ * Forwarding needs more, so handlers must keep using the runtime's stack. */
+#define APPLICATION_STACK_SIZE 8192
+static char *application_stack;
+static void on_application_stack(int sig) {
+    stack_t ss, kernel;
+    assert(sig == SIGUSR1 && sigaltstack(NULL, &kernel) == 0 && (kernel.ss_flags & SS_ONSTACK));
+    uintptr_t sp = (uintptr_t)__builtin_frame_address(0);
+    assert(sp - (uintptr_t)kernel.ss_sp < kernel.ss_size);
+    assert(sp - (uintptr_t)application_stack >= APPLICATION_STACK_SIZE);
+    assert(sigaltstack__teapot_wrapper__(NULL, &ss) == 0);
+    assert(ss.ss_sp == application_stack && ss.ss_size == APPLICATION_STACK_SIZE && ss.ss_flags == SS_ONSTACK);
+#if defined(__aarch64__)
+    assert(checkpoint_rollback_probe((void *)((sp - 1024) & ~(uintptr_t)15)) == 1);
+#endif
+    ++calls;
+}
+static void check_application_altstack(void) {
+    long page = sysconf(_SC_PAGESIZE);
+    char *mapping = mmap(NULL, page + APPLICATION_STACK_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    assert(mapping != MAP_FAILED);
+    application_stack = mapping + page;
+    assert(mprotect(application_stack, APPLICATION_STACK_SIZE, PROT_READ | PROT_WRITE) == 0);
+    stack_t runtime, ss = {.ss_sp = application_stack, .ss_size = APPLICATION_STACK_SIZE}, old;
+    assert(sigaltstack(NULL, &runtime) == 0);
+    assert(sigaltstack__teapot_wrapper__(&ss, &old) == 0);
+    struct sigaction action = {.sa_handler = on_application_stack, .sa_flags = SA_ONSTACK};
+    assert(sigaction__teapot_wrapper__(SIGUSR1, &action, NULL) == 0);
+    assert(raise(SIGUSR1) == 0);
+    assert(calls == 1);
+    assert(old.ss_flags == SS_DISABLE);
+    stack_t kernel;
+    assert(sigaltstack(NULL, &kernel) == 0 && kernel.ss_sp == runtime.ss_sp && kernel.ss_size == runtime.ss_size);
+    assert(sigaltstack__teapot_wrapper__(NULL, &old) == 0);
+    assert(old.ss_sp == application_stack && old.ss_size == APPLICATION_STACK_SIZE && old.ss_flags == 0);
+    /* The kernel's validation still applies. */
+    ss.ss_size = 1;
+    assert(sigaltstack__teapot_wrapper__(&ss, NULL) == -1 && errno == ENOMEM);
+    ss.ss_flags = 12345;
+    assert(sigaltstack__teapot_wrapper__(&ss, NULL) == -1 && errno == EINVAL);
+    ss.ss_flags = SS_DISABLE;
+    assert(sigaltstack__teapot_wrapper__(&ss, NULL) == 0);
+    assert(sigaltstack__teapot_wrapper__(NULL, &old) == 0 && old.ss_flags == SS_DISABLE);
+    assert(sigaltstack(NULL, &kernel) == 0 && kernel.ss_sp == runtime.ss_sp);
+    puts("PASS: an application's own alternate stack is recorded; handlers use the runtime's");
+}
 #if defined(__riscv) && __riscv_xlen == 64
 static __thread volatile int tls_marker = 0x5a5a;
 static void on_tp(int sig) {
@@ -312,6 +358,7 @@ int main(int argc, char **argv) {
 #endif
     if (!strcmp(argv[1], "registers")) { mode = 5; check_registers(); return 0; }
     if (!strcmp(argv[1], "slots")) { check_slots(); return 0; }
+    if (!strcmp(argv[1], "application-altstack")) { check_application_altstack(); return 0; }
 #if defined(__aarch64__)
     if (!strcmp(argv[1], "altstack")) { check_altstack(); return 0; }
 #endif

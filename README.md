@@ -179,6 +179,10 @@ The single-threaded runtime reserves a guarded alternate signal stack with the
 kernel-reported signal-frame minimum plus 64 KiB of handler space (at least
 `SIGSTKSZ` is reserved for the frame on older kernels). This avoids overflowing
 old libc's fixed `SIGSTKSZ` during out-of-simulation diagnostics and forwarding.
+Every handler runs on that stack. A rewritten `sigaltstack` call is validated
+by the kernel and recorded, and later calls report the application's stack,
+but the runtime's stack stays installed. A handler that needs more than the
+64 KiB budget is not supported.
 ASan-only tests are registered only when a real executable link probe succeeds,
 including in cross builds. Static-only configurations omit those tests explicitly;
 they still run the non-ASan runtime tests, not a substitute shadow mapper.

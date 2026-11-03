@@ -36,7 +36,8 @@ if(BUILD_TESTING)
     endif()
     target_link_options(checkpoint_signal_deferral_test PRIVATE
         -Wl,--wrap=${signal_entry} -Wl,--wrap=restore_checkpoint_registers)
-    set(signal_deferral_checks timer queued skip late-restore restart registers slots)
+    set(signal_deferral_checks timer queued skip late-restore restart registers slots
+        application-altstack)
     if(CHECKPOINT_ARCH_NAME STREQUAL "aarch64")
         list(APPEND signal_deferral_checks altstack)
     elseif(CHECKPOINT_ARCH_NAME STREQUAL "riscv64")
