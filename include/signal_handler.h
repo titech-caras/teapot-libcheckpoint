@@ -5,6 +5,7 @@
 #include <stdbool.h>
 
 extern uint64_t teapot_pending_signals;
+extern uintptr_t teapot_signal_resume_target;
 void teapot_signal_prepare_resume(uint64_t *target);
 bool teapot_signal_runtime_busy(void *context);
 

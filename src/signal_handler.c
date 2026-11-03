@@ -93,7 +93,9 @@ static bool signal_can_refault(int sig, const siginfo_t *info) {
  * slots across instruction boundaries, and a rewritten handler's own patches
  * reuse them: checkpoint-site arguments, x64's no-scratch rax at offset 0,
  * every ISA's wrapper spills and RV64's landing-pad slots from the first spill
- * offset through x64's REP DIFT state, and the text-DIFT register saves. */
+ * offset through x64's REP DIFT state, and the text-DIFT register saves. The
+ * resume target is saved too: an x64 resume stub interrupted at its final jump
+ * still reads it, and a handler that rolls back may set its own. */
 static const struct { size_t offset, size; } forwarded_scratch_slots[] = {
     {0, 64},
     {SCRATCHPAD_FIRST_SPILL_OFFSET,
@@ -101,7 +103,7 @@ static const struct { size_t offset, size; } forwarded_scratch_slots[] = {
     {TEXT_DIFT_LLVM_SCRATCH_SAVE_OFFSET, 4096},
 };
 #define FORWARDED_SLOT_WORDS ((CHECKPOINT_TARGET_METADATA_SIZE + 64 + \
-    X64_REP_STATE_OFFSET + X64_REP_STATE_SIZE - SCRATCHPAD_FIRST_SPILL_OFFSET + 4096) / 8)
+    X64_REP_STATE_OFFSET + X64_REP_STATE_SIZE - SCRATCHPAD_FIRST_SPILL_OFFSET + 4096 + 8) / 8)
 
 /* Volatile word accesses, as for the register tags below: no libc copies. */
 static void exchange_forwarded_slots(uint64_t *saved, bool restore) {
@@ -114,6 +116,8 @@ static void exchange_forwarded_slots(uint64_t *saved, bool restore) {
         for (size_t i = 0; i < forwarded_scratch_slots[r].size / 8; ++i, ++saved)
             if (restore) word[i] = *saved; else *saved = word[i];
     }
+    volatile uintptr_t *target = &teapot_signal_resume_target;
+    if (restore) *target = *saved; else *saved = *target;
 }
 
 static void invoke_saved_signal_action(int sig, siginfo_t *info, void *ucontext) {

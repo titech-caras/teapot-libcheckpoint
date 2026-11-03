@@ -96,7 +96,16 @@ static void on_user(int sig, siginfo_t *info, void *context) {
         assert(info->si_code == (sig == SIGSEGV ? SI_USER : sig == SIGUSR1 ? SI_QUEUE : SI_TKILL));
         if (sig == SIGUSR1) assert(info->si_value.sival_int == 1234);
     }
-    if (mode == 5) assert(checkpoint_rollback_probe(handler_checkpoint_stack) == 1);
+    if (mode == 5) {
+        assert(checkpoint_rollback_probe(handler_checkpoint_stack) == 1);
+        /* At the stub's final jump, a nested signal frame on the same stack may
+         * cover the released stub frame, and a handler that rolls back sets
+         * its own resume target. Neither may change where the stub goes. */
+#if defined(__x86_64__)
+        ((uint64_t *)((ucontext_t *)context)->uc_mcontext.gregs[REG_RSP])[1] = 0;
+#endif
+        teapot_signal_resume_target = 0;
+    }
     ++calls;
 }
 static void check_restart(void) {
@@ -144,7 +153,6 @@ static void check_child_flags(void) {
 
 uint64_t test_signal_register_values[10], test_signal_flags;
 extern void test_signal_registers(void), test_signal_registers_return(void);
-extern uintptr_t teapot_signal_resume_target;
 static void check_registers(void) {
     struct sigaction action = {.sa_sigaction = on_user, .sa_flags = SA_SIGINFO};
     assert(sigaction__teapot_wrapper__(SIGUSR1, &action, NULL) == 0);

@@ -4,6 +4,9 @@
 /* A continuation, not a C call. Save syscall clobbers on the application stack
  * (below the x64 red zone), and copy all shared state before unblocking. Once
  * the syscall returns, a handler may freely checkpoint using runtime scratch.
+ * x64 jumps through teapot_signal_resume_target itself: once its frame is
+ * released, a nested signal frame on the same stack may cover it, and
+ * forwarded handlers give the target back unchanged.
  * No vector instructions are used: the kernel preserves FP/vector state. */
     .text
     .globl teapot_signal_resume
@@ -24,8 +27,6 @@ teapot_signal_resume:
     pushfq
     popq %rax
     movq %rax, 72(%rsp)
-    movq teapot_signal_resume_target(%rip), %rax
-    movq %rax, 8(%rsp)
 teapot_signal_resume_mask_load:
     movq teapot_pending_signals(%rip), %rax
     movq %rax, (%rsp)
@@ -49,7 +50,7 @@ teapot_signal_resume_unblocked:
     movq 56(%rsp), %rcx
     movq 64(%rsp), %r11
     leaq 208(%rsp), %rsp
-    jmp *-200(%rsp)
+    jmp *teapot_signal_resume_target(%rip)
 #elif defined(__aarch64__)
     .type teapot_signal_resume,%function
 teapot_signal_resume:
