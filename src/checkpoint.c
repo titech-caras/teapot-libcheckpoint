@@ -640,14 +640,14 @@ static void libcheckpoint_prepare_runtime(int argc, char **argv) {
     (void)argv;
 #endif
     setup_signal_handler();
-    libcheckpoint_runtime_initialized = true;
+    libcheckpoint_runtime_initialized = true; TEAPOT_NESTED_SEED_INIT(argc, argv);
 }
 
 LIBCHECKPOINT_PRESERVE_MOST void libcheckpoint_enable(int argc, char **argv) {
     if (libcheckpoint_enabled)
         return;
 
-    libcheckpoint_prepare_runtime(argc, argv); TEAPOT_NESTED_SEED_INIT(argc, argv);
+    libcheckpoint_prepare_runtime(argc, argv);
 
     fprintf(stderr, "[teapot], "
         "Gadget Type, Gadget Address, Mem Access Address, "

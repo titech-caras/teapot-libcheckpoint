@@ -20,7 +20,6 @@
 	leal -1(%rdx), %ecx
 	testl %edx, %ecx
 	jnz .Lhashed_skip\@
-	movq $MAX_CHECKPOINTS, max_checkpoints
 	incl teapot_nested_root_gen
 	jnz .Lhashed_allow\@
 	incl teapot_nested_root_gen
@@ -37,6 +36,8 @@
 	je .Lhashed_skip\@
 	incl %edx
 	movw %dx, 8(%rsi)
+	cmpl $1, %edx
+	je .Lhashed_allow\@
 	cmpl $0xffff, %edx
 	je .Lhashed_skip\@
 	/* key = (u64(root_gen) << 24) ^ (site_index << 1) ^ outcome */

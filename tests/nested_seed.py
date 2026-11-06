@@ -49,3 +49,17 @@ with tempfile.TemporaryDirectory() as directory:
         os.close(fd)
     check([str(path)], 0xfedcba9876543210, "0xfedcba9876543210")
     check([], 0, "0")
+
+    read_fd, write_fd = os.pipe()
+    payload = b"pipe input survives runtime init"
+    os.write(write_fd, payload)
+    os.close(write_fd)
+    try:
+        os.environ["TEAPOT_TEST_PIPE"] = payload.decode()
+        check([f"/dev/fd/{read_fd}"], seed(b""), fds=(read_fd,))
+    finally:
+        os.environ.pop("TEAPOT_TEST_PIPE")
+        os.close(read_fd)
+    fifo = Path(directory) / "fifo"
+    os.mkfifo(fifo)
+    check([str(fifo)], seed(b""))

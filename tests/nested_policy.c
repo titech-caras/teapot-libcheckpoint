@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include "checkpoint.h"
 #include "nested_policy.h"
 #include "nested_model.h"
@@ -101,6 +103,15 @@ int main(int argc, char **argv) {
     libcheckpoint_enable(argc, argv);
     /* The new archive must carry the usual libc bridges as well. */
     assert(strlen__dift_wrapper__("hashed") == 6);
+    const char *pipe_data = getenv("TEAPOT_TEST_PIPE");
+    if (pipe_data) {
+        int fd = open(argv[1], O_RDONLY);
+        char buffer[128];
+        ssize_t n = read(fd, buffer, sizeof buffer);
+        assert(n == (ssize_t)strlen(pipe_data) && memcmp(buffer, pipe_data, n) == 0);
+        assert(read(fd, buffer, sizeof buffer) == 0);
+        close(fd);
+    }
     const char *expected_seed = getenv("TEAPOT_TEST_SEED");
     if (expected_seed) {
         assert(teapot_nested_seed_word == strtoull(expected_seed, NULL, 16));

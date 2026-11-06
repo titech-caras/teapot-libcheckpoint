@@ -17,9 +17,6 @@
 	sub w1, w0, #1
 	tst w0, w1
 	b.ne .Lskip_checkpoint
-	LOAD_ADDR x16, max_checkpoints
-	mov x1, #MAX_CHECKPOINTS
-	str x1, [x16]
 	LOAD_ADDR x16, teapot_nested_root_gen
 	ldr w0, [x16]
 	adds w0, w0, #1
@@ -41,6 +38,8 @@
 	b.eq .Lskip_checkpoint
 	add w16, w16, #1
 	strh w16, [x19, #8]
+	cmp w16, #1
+	b.eq .Lhashed_done
 	cmp w16, w17
 	b.eq .Lskip_checkpoint
 	mov w19, w16

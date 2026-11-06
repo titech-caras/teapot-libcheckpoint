@@ -1,4 +1,7 @@
 #include <stdint.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <sys/syscall.h>
 #include "checkpoint.h"
@@ -36,11 +39,8 @@ static long seed_syscall(long number, long a, long b, long c, long d) {
 }
 
 void teapot_nested_seed_init(int argc, char **argv) {
-    static uint64_t ready LIBCHECKPOINT_PROTECTED_SECTION;
-    LIBCHECKPOINT_ASSERT_PROTECTED(ready);
-    if (ready)
-        return;
-    ready = 1;
+    extern uint64_t max_checkpoints;
+    max_checkpoints = MAX_CHECKPOINTS;
     const char *override = getenv("TEAPOT_NESTED_SEED");
     if (override) {
         teapot_nested_seed_word = strtoull(override, NULL, 16);
@@ -48,13 +48,26 @@ void teapot_nested_seed_init(int argc, char **argv) {
     }
     uint64_t h = UINT64_C(0xcbf29ce484222325) ^ 1;
     if (argc > 1) {
-        long fd = seed_syscall(SYS_openat, -100 /* AT_FDCWD */, (long)argv[1], 0, 0);
+        long fd;
+        do {
+            fd = seed_syscall(SYS_openat, AT_FDCWD, (long)argv[1], O_RDONLY | O_NONBLOCK | O_CLOEXEC, 0);
+        } while (fd == -EINTR);
         if (fd >= 0) {
-            unsigned char buffer[1 << 16];
-            long n;
-            while ((n = seed_syscall(SYS_read, fd, (long)buffer, sizeof buffer, 0)) > 0)
-                for (long i = 0; i < n; ++i)
-                    h = (h ^ buffer[i]) * UINT64_C(0x100000001b3);
+            struct stat status;
+            if (seed_syscall(SYS_fstat, fd, (long)&status, 0, 0) == 0 && S_ISREG(status.st_mode)) {
+                unsigned char buffer[1 << 16];
+                for (;;) {
+                    long n = seed_syscall(SYS_read, fd, (long)buffer, sizeof buffer, 0);
+                    if (n == -EINTR)
+                        continue;
+                    if (n < 0)
+                        h = UINT64_C(0xcbf29ce484222325) ^ 1;
+                    if (n <= 0)
+                        break;
+                    for (long i = 0; i < n; ++i)
+                        h = (h ^ buffer[i]) * UINT64_C(0x100000001b3);
+                }
+            }
             seed_syscall(SYS_close, fd, 0, 0, 0);
         }
     }

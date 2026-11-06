@@ -16,9 +16,6 @@
 	addi t6, t5, -1
 	and t6, t6, t5
 	bnez t6, .Lskip_checkpoint
-	LOAD_ADDR t0, max_checkpoints
-	li t1, MAX_CHECKPOINTS
-	sd t1, 0(t0)
 	LOAD_ADDR t0, teapot_nested_root_gen
 	lw t1, 0(t0)
 	addiw t1, t1, 1
@@ -39,6 +36,8 @@
 	beq t5, t6, .Lskip_checkpoint
 	addi t5, t5, 1
 	sh t5, 8(t4)
+	li t0, 1
+	beq t5, t0, .Lhashed_done
 	beq t5, t6, .Lskip_checkpoint
 	slli s0, s0, 24
 	LOAD_ADDR t0, checkpoint_target_metadata
