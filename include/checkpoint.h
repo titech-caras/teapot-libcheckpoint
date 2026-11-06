@@ -48,7 +48,13 @@
 #define CHECKPOINT_TARGET_SCRATCH_REG_ADDR 24
 #define CHECKPOINT_TARGET_FIXED_REG0_SOURCE 32
 #define CHECKPOINT_TARGET_FIXED_REG1_SOURCE 40
+#ifdef ENABLE_HASHED_NESTED
+#define CHECKPOINT_TARGET_OUTCOME 48
+#define CHECKPOINT_TARGET_SITE_INDEX 56
+#define CHECKPOINT_TARGET_METADATA_SIZE 64
+#else
 #define CHECKPOINT_TARGET_METADATA_SIZE 48
+#endif
 /* A negative fixed-register source means none; Teapot writes this value. */
 #define CHECKPOINT_TARGET_FIXED_REG_NONE (-1)
 /* Each trampoline's branch counter is a uint32_t (incl, ldr w, lw). */

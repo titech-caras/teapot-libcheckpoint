@@ -354,6 +354,9 @@ make_checkpoint_riscv64:
 	lbu	t0, 0(t0)
 	beqz	t0, .Lskip_checkpoint
 
+#ifdef ENABLE_HASHED_NESTED
+#include "nested_riscv64.inc"
+#else
 	LOAD_ADDR t0, checkpoint_cnt
 	ld	t2, 0(t0)
 	bnez	t2, .Lif_should_checkpoint
@@ -408,6 +411,7 @@ make_checkpoint_riscv64:
 	LOAD_ADDR t0, max_checkpoints
 	ld	t1, 0(t0)
 	bge	t2, t1, .Lskip_checkpoint
+#endif
 	LOAD_ADDR t0, checkpoint_cnt
 	addi	t1, t2, 1
 	sd	t1, 0(t0)

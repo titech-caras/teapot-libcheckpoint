@@ -40,7 +40,7 @@ function(teapot_dfsan_wrapper_object name)
     set_source_files_properties("${object}" PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
 endfunction()
 
-foreach(runtime IN ITEMS checkpoint checkpoint_nested)
+foreach(runtime IN ITEMS checkpoint checkpoint_nested checkpoint_nested_hashed)
     if(TARGET ${runtime})
         teapot_dfsan_wrapper_object(${runtime}_dfsan_wrappers)
         teapot_configure_checkpoint_target(${runtime}_dfsan_wrappers)

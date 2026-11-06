@@ -3,6 +3,8 @@
 This repository contains the Teapot runtime library.  It builds x86-64,
 AArch64, and RV64 variants.
 
+`TEAPOT_BUILD_NESTED_RUNTIME=ON` also builds `checkpoint_nested_hashed`, the opt-in runtime for Teapot's `--enable-nested-speculation --nested-policy hashed`; the paper runtime remains unchanged. Its seed hashes the bytes of `argv[1]` through a separate raw-syscall open, or uses `TEAPOT_NESTED_SEED=<hex u64>` directly, and is printed with `VERBOSE` statistics. Use its matching contract JSON: paper and hashed binaries cannot exchange runtimes.
+
 ## Layout
 
 - `include/`: public runtime headers and architecture constants.

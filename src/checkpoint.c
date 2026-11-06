@@ -1,4 +1,8 @@
 #include "checkpoint.h"
+#include "nested_policy.h"
+/* Keep the paper build's assert locations (and therefore its object bytes)
+ * at the original line numbers when hashed-only code is compiled out. */
+#line 2
 #include "report_internal.h"
 #include "fault_sites.h"
 #include "runtime_contract.h"
@@ -407,6 +411,10 @@ static const char *const contract_capability_names[] = {
     "nested", "aarch64_bti_pac", "dift_runtime", "x64_vector_full", "coverage",
     "riscv64_float_state", "x64_vector_sse", "x64_vector_avx", "fault_training", "fault_publishing",
     "shadow_mapping_enforcement",
+#ifdef ENABLE_HASHED_NESTED
+    "hashed_nested",
+#endif
+#line 410
 };
 _Static_assert((1u << (sizeof(contract_capability_names) / sizeof(*contract_capability_names))) - 1 ==
                LIBCHECKPOINT_CAPABILITIES_KNOWN, "name every contract capability");
@@ -468,6 +476,11 @@ static void check_runtime_contract_with_environment(char *const *environment) {
             reject_contract("a module record does not refer to this runtime",
                             (uint64_t)(uintptr_t)record->anchor, (uint64_t)(uintptr_t)runtime);
         uint64_t missing = record->capabilities & ~runtime->capabilities;
+#ifdef ENABLE_HASHED_NESTED
+        if (!(record->capabilities & LIBCHECKPOINT_CAPABILITY_HASHED_NESTED))
+            reject_contract("nested policy mismatch (hashed runtime)", record->capabilities, runtime->capabilities);
+#endif
+#line 471
         if (missing) {
             fputs("libcheckpoint: the program needs runtime capabilities this archive lacks:", stderr);
             for (size_t bit = 0; bit < sizeof(contract_capability_names) / sizeof(*contract_capability_names); bit++)
@@ -648,6 +661,10 @@ LIBCHECKPOINT_PRESERVE_MOST void libcheckpoint_enable(int argc, char **argv) {
         return;
 
     libcheckpoint_prepare_runtime(argc, argv);
+#ifdef ENABLE_HASHED_NESTED
+    teapot_nested_seed_init(argc, argv);
+#endif
+#line 651
 
     fprintf(stderr, "[teapot], "
         "Gadget Type, Gadget Address, Mem Access Address, "
@@ -665,9 +682,14 @@ LIBCHECKPOINT_PRESERVE_MOST void libcheckpoint_disable() {
 
 #ifdef VERBOSE
     print_statistics();
+#ifdef ENABLE_HASHED_NESTED
+    fprintf(stderr, "[teapot] Nested seed: %016" PRIx64 "\n", teapot_nested_seed_word);
+#endif
+#line 668
 #endif
 }
 
+#line 671
 LIBCHECKPOINT_RESTORE_PATH __attribute__((noreturn)) void restore_checkpoint(int type) {
     assert(checkpoint_cnt > 0);
 

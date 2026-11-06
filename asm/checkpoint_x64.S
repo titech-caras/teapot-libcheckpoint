@@ -320,6 +320,9 @@ DEF_REPORT_GADGET_X64_PRESERVE TARGET
 	cmpb	$0, libcheckpoint_enabled
 	je	.Lskip_checkpoint\@
 
+#ifdef ENABLE_HASHED_NESTED
+#include "nested_x64.inc"
+#else
 	movq	checkpoint_cnt, %rax
 	testq	%rax, %rax
 	jnz	.Lif_should_checkpoint\@
@@ -354,6 +357,7 @@ DEF_REPORT_GADGET_X64_PRESERVE TARGET
 .Lif_should_checkpoint\@:
 	cmpq	max_checkpoints, %rax
 	jge	.Lskip_checkpoint\@
+#endif
 	incl	checkpoint_cnt
 
 	pushq	%rax

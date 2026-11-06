@@ -28,5 +28,10 @@
 	RESERVE scratchpad, SCRATCHPAD_SIZE, 16
 	/* Last, so its 8-byte alignment leaves no gap between the objects. */
 	RESERVE max_checkpoints, 8, 8
+#ifdef ENABLE_HASHED_NESTED
+	/* Neither these globals nor the site's gen/tree words are checkpointed. */
+	RESERVE teapot_nested_root_gen, 8, 8
+	RESERVE teapot_nested_seed_word, 8, 8
+#endif
 
 	.section .note.GNU-stack,"",ELF_PROGBITS

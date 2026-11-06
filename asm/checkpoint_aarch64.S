@@ -336,6 +336,9 @@ make_checkpoint_aarch64:
 	ldrb	w16, [x16]
 	cbz	w16, .Lskip_checkpoint
 
+#ifdef ENABLE_HASHED_NESTED
+#include "nested_aarch64.inc"
+#else
 	LOAD_ADDR x16, checkpoint_cnt
 	ldr	x0, [x16]
 	cbnz	x0, .Lif_should_checkpoint
@@ -379,6 +382,7 @@ make_checkpoint_aarch64:
 	ldr	x17, [x16]
 	cmp	x0, x17
 	b.ge	.Lskip_checkpoint
+#endif
 	LOAD_ADDR x16, checkpoint_cnt
 	add	x17, x0, #1
 	str	x17, [x16]
