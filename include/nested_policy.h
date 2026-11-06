@@ -16,4 +16,21 @@ _Static_assert(sizeof(struct teapot_nested_site) == 12, "nested site stride");
 extern uint32_t teapot_nested_root_gen;
 extern uint64_t teapot_nested_seed_word;
 void teapot_nested_seed_init(int argc, char **argv);
+
+/* Keep these hooks on their existing checkpoint.c lines: paper builds retain
+ * their object bytes without overriding real diagnostic line numbers. */
+#define TEAPOT_NESTED_CAPABILITY_NAME "hashed_nested",
+#define TEAPOT_NESTED_POLICY_CHECK(record, runtime) do { \
+    if (!((record)->capabilities & LIBCHECKPOINT_CAPABILITY_HASHED_NESTED)) \
+        reject_contract("nested policy mismatch (hashed runtime)", \
+                        (record)->capabilities, (runtime)->capabilities); \
+} while (0)
+#define TEAPOT_NESTED_SEED_INIT(argc, argv) teapot_nested_seed_init(argc, argv)
+#define TEAPOT_NESTED_PRINT_SEED() \
+    fprintf(stderr, "[teapot] Nested seed: %016" PRIx64 "\n", teapot_nested_seed_word)
+#else
+#define TEAPOT_NESTED_CAPABILITY_NAME
+#define TEAPOT_NESTED_POLICY_CHECK(record, runtime)
+#define TEAPOT_NESTED_SEED_INIT(argc, argv)
+#define TEAPOT_NESTED_PRINT_SEED()
 #endif

@@ -1,14 +1,10 @@
 #include "checkpoint.h"
-#include "nested_policy.h"
-/* Keep the paper build's assert locations (and therefore its object bytes)
- * at the original line numbers when hashed-only code is compiled out. */
-#line 2
 #include "report_internal.h"
 #include "fault_sites.h"
 #include "runtime_contract.h"
 #include "signal_handler.h"
 #include "dift_support.h"
-
+#include "nested_policy.h"
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -410,11 +406,7 @@ extern const char __stop_teapot_contract[] __attribute__((weak));
 static const char *const contract_capability_names[] = {
     "nested", "aarch64_bti_pac", "dift_runtime", "x64_vector_full", "coverage",
     "riscv64_float_state", "x64_vector_sse", "x64_vector_avx", "fault_training", "fault_publishing",
-    "shadow_mapping_enforcement",
-#ifdef ENABLE_HASHED_NESTED
-    "hashed_nested",
-#endif
-#line 410
+    "shadow_mapping_enforcement", TEAPOT_NESTED_CAPABILITY_NAME
 };
 _Static_assert((1u << (sizeof(contract_capability_names) / sizeof(*contract_capability_names))) - 1 ==
                LIBCHECKPOINT_CAPABILITIES_KNOWN, "name every contract capability");
@@ -475,12 +467,7 @@ static void check_runtime_contract_with_environment(char *const *environment) {
         if (record->anchor != runtime)
             reject_contract("a module record does not refer to this runtime",
                             (uint64_t)(uintptr_t)record->anchor, (uint64_t)(uintptr_t)runtime);
-        uint64_t missing = record->capabilities & ~runtime->capabilities;
-#ifdef ENABLE_HASHED_NESTED
-        if (!(record->capabilities & LIBCHECKPOINT_CAPABILITY_HASHED_NESTED))
-            reject_contract("nested policy mismatch (hashed runtime)", record->capabilities, runtime->capabilities);
-#endif
-#line 471
+        uint64_t missing = record->capabilities & ~runtime->capabilities; TEAPOT_NESTED_POLICY_CHECK(record, runtime);
         if (missing) {
             fputs("libcheckpoint: the program needs runtime capabilities this archive lacks:", stderr);
             for (size_t bit = 0; bit < sizeof(contract_capability_names) / sizeof(*contract_capability_names); bit++)
@@ -660,11 +647,7 @@ LIBCHECKPOINT_PRESERVE_MOST void libcheckpoint_enable(int argc, char **argv) {
     if (libcheckpoint_enabled)
         return;
 
-    libcheckpoint_prepare_runtime(argc, argv);
-#ifdef ENABLE_HASHED_NESTED
-    teapot_nested_seed_init(argc, argv);
-#endif
-#line 651
+    libcheckpoint_prepare_runtime(argc, argv); TEAPOT_NESTED_SEED_INIT(argc, argv);
 
     fprintf(stderr, "[teapot], "
         "Gadget Type, Gadget Address, Mem Access Address, "
@@ -681,15 +664,10 @@ LIBCHECKPOINT_PRESERVE_MOST void libcheckpoint_disable() {
     libcheckpoint_enabled = false;
 
 #ifdef VERBOSE
-    print_statistics();
-#ifdef ENABLE_HASHED_NESTED
-    fprintf(stderr, "[teapot] Nested seed: %016" PRIx64 "\n", teapot_nested_seed_word);
-#endif
-#line 668
+    print_statistics(); TEAPOT_NESTED_PRINT_SEED();
 #endif
 }
 
-#line 671
 LIBCHECKPOINT_RESTORE_PATH __attribute__((noreturn)) void restore_checkpoint(int type) {
     assert(checkpoint_cnt > 0);
 
