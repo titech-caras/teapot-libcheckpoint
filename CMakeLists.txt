@@ -552,7 +552,7 @@ if(BUILD_TESTING)
                 endif()
             endif()
         endif()
-        foreach(check IN ITEMS capacity timing storage memlog memlog-validation memlog-order queued-tags coverage
+        foreach(check IN ITEMS capacity timing storage memlog memlog-validation memlog-overlap memlog-order queued-tags coverage
                                assertions)
             add_test(NAME checkpoint_entry_${mode}_${check}
                 COMMAND ${entry_test} ${check})

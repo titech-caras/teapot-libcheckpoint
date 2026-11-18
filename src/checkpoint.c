@@ -540,14 +540,6 @@ void libcheckpoint_prepare_aarch64_bti_pac_components(void) {
 }
 #endif
 
-static bool memory_history_entry_is_valid(const memory_history_t *entry) {
-#if defined(__aarch64__) && defined(TEAPOT_AARCH64_MTE_TAG_STORAGE)
-    if (entry->size == MEM_HISTORY_MTE_TAG_SIZE)
-        return true;
-#endif
-    return entry->size > 0 && entry->size <= sizeof(entry->data);
-}
-
 static __attribute__((noreturn)) void invalid_memory_history(const char *message) {
     /* Speculative writes may have damaged the application's stdio objects. */
     in_restore_memlog = false;
@@ -564,13 +556,6 @@ static void validate_memory_history_range(memory_history_t *checkpoint_top) {
     if (memory_history_top < checkpoint_top ||
             memory_history_top > &memory_history[MEM_HISTORY_LEN]) {
         invalid_memory_history("Current memory history pointer is outside runtime history\n");
-    }
-
-    for (memory_history_t *entry = memory_history_top; entry > checkpoint_top;) {
-        entry--;
-        if (!memory_history_entry_is_valid(entry)) {
-            invalid_memory_history("Invalid memory history entry during rollback\n");
-        }
     }
 }
 
@@ -758,19 +743,21 @@ LIBCHECKPOINT_RESTORE_PATH void restore_checkpoint_memlog() {
     while (memory_history_top > checkpoint_metadata[checkpoint_cnt].memory_history_top) {
         // This may fail if the address is only readable. SIGSEGV handler detects this and the entry will be skipped.
         memory_history_top--;
+        /* A newer logged store may have modified this entry. Read its size
+         * only after all newer entries have been undone. */
+        size_t size = memory_history_top->size;
 #if defined(__aarch64__) && defined(TEAPOT_AARCH64_MTE_TAG_STORAGE)
-        if (memory_history_top->size == MEM_HISTORY_MTE_TAG_SIZE) {
+        if (size == MEM_HISTORY_MTE_TAG_SIZE) {
             mte_store_tag((uintptr_t)memory_history_top->addr,
                     (uint8_t)memory_history_top->data);
             memory_history_top->size = 0;
             continue;
         }
 #endif
+        if (size == 0 || size > sizeof(memory_history_top->data))
+            invalid_memory_history("Invalid memory history entry during rollback\n");
         volatile uint8_t *dst = (volatile uint8_t *)memory_history_top->addr;
         const uint8_t *src = (const uint8_t *)&memory_history_top->data;
-        size_t size = memory_history_top->size;
-        if (size > sizeof(memory_history_top->data))
-            invalid_memory_history("Invalid memory history entry during rollback\n");
         /* All supported Linux targets have pages at least 4 KiB. Using that
          * granule is conservative on 16/64 KiB hosts. Cross-page replay keeps
          * byte ordering so a later fault leaves the same restored prefix. */

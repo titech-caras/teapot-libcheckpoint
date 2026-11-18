@@ -407,9 +407,7 @@ static void check_memlog(void) {
     assert(munmap(page, page_size) == 0);
 }
 
-/* A rollback validates the whole log before it writes anything: an older
- * corrupt entry beneath a newer valid one stops it with the target untouched.
- * The rollback runs in a child; the target is shared memory the parent reads. */
+/* Undo the newer entry, then terminate on the invalid entry even with broken stdio. */
 static void check_memlog_validation(void) {
     uint64_t *target = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     assert(target != MAP_FAILED);
@@ -430,8 +428,27 @@ static void check_memlog_validation(void) {
     int status;
     assert(waitpid(child, &status, 0) == child);
     assert(WIFEXITED(status) && WEXITSTATUS(status) == EXIT_FAILURE);
-    assert(target[0] == UINT64_C(0x5555555555555555));
+    assert(target[0] == UINT64_MAX);
     assert(munmap(target, 4096) == 0);
+}
+
+static void check_memlog_overlap(void) {
+    uint64_t word = UINT64_C(0x123456789abcdef0);
+    const uint64_t original = word;
+    checkpoint_cnt = 0;
+    checkpoint_metadata[0].memory_history_top = memory_history;
+    memory_history_top = memory_history;
+
+    *memory_history_top++ = (memory_history_t){.addr = &word, .data = word, .size = sizeof(word)};
+    word = 0;
+    uint8_t *older_size = &memory_history[0].size;
+    *memory_history_top++ = (memory_history_t){.addr = older_size, .data = *older_size, .size = 1};
+    *older_size = 0;
+
+    restore_checkpoint_memlog();
+    assert(word == original);
+    assert(memory_history_top == memory_history);
+    assert(memory_history[0].size == 0 && memory_history[1].size == 0);
 }
 
 /* Verify exact calls without adding ASan's startup requirements to the
@@ -695,6 +712,8 @@ int main(int argc, char **argv) {
         check_memlog();
     else if (strcmp(argv[1], "memlog-validation") == 0)
         check_memlog_validation();
+    else if (strcmp(argv[1], "memlog-overlap") == 0)
+        check_memlog_overlap();
     else if (strcmp(argv[1], "memlog-order") == 0)
         check_memlog_order();
 #if defined(__aarch64__) && defined(TEAPOT_AARCH64_MTE_TAG_STORAGE)
