@@ -1,7 +1,9 @@
 #undef NDEBUG
 #include <assert.h>
 #include <stdint.h>
+#include <string.h>
 #include "checkpoint.h"
+#include "nested_policy.h"
 
 extern uint64_t max_checkpoints;
 extern uintptr_t checkpoint_target_metadata[];
@@ -9,7 +11,11 @@ extern memory_history_t *memory_history_top;
 extern uint32_t *guard_list_top;
 extern void checkpoint_df_probe(uint64_t flags);
 uint64_t checkpoint_df_seen[8];
-static uint32_t df_branch_count;
+#ifdef ENABLE_HASHED_NESTED
+static struct teapot_nested_site df_branch_site;
+#else
+static uint32_t df_branch_site;
+#endif
 
 extern __attribute__((noreturn)) void __real_restore_checkpoint(int reason);
 __attribute__((noreturn)) void __wrap_restore_checkpoint(int reason) {
@@ -40,8 +46,8 @@ void check_x64_df(void) {
                 max_checkpoints = MAX_CHECKPOINTS;
                 libcheckpoint_enabled = skip != 1;
                 checkpoint_target_metadata[CHECKPOINT_TARGET_BRANCH_COUNTER_ADDR / 8] =
-                    (uintptr_t)&df_branch_count;
-                df_branch_count = 0;
+                    (uintptr_t)&df_branch_site;
+                memset(&df_branch_site, 0, sizeof(df_branch_site));
                 memory_history_top = memory_history;
                 guard_list_top = guard_list;
                 for (unsigned j = 0; j < 8; ++j) checkpoint_df_seen[j] = 0;

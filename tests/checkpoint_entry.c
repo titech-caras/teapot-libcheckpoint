@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "checkpoint.h"
+#include "nested_policy.h"
 #include "signal_handler.h"
 
 extern uint64_t max_checkpoints;
@@ -55,7 +56,17 @@ __asm__(".pushsection .data.checkpoint_test_guards,\"aw\"\n"
         ".popsection\n");
 extern uint32_t __guard_start__teapot__[COVERAGE_GUARDS];
 _Static_assert(COVERAGE_GUARDS == 4, "the assembly above reserves four guards");
-static uint32_t branch_counter;
+#ifdef ENABLE_HASHED_NESTED
+static struct teapot_nested_site branch_site;
+#else
+static uint32_t branch_site;
+#endif
+
+/* Each independent entry/rollback probe needs a fresh branch history. */
+void checkpoint_test_reset_site(void) {
+    memset(&branch_site, 0, sizeof(branch_site));
+    max_checkpoints = MAX_CHECKPOINTS;
+}
 static void *stack_top;
 static unsigned poisoned_ranges;
 static sigjmp_buf memlog_fault_return;
@@ -105,8 +116,7 @@ static void check_riscv64_pure_sigill(void) {
             pure_sigill_kind = kind;
             memset(&simulation_statistics, 0, sizeof(simulation_statistics));
             checkpoint_cnt = depth;
-            max_checkpoints = MAX_CHECKPOINTS;
-            branch_counter = 0;
+            checkpoint_test_reset_site();
             memory_history_top = memory_history;
             guard_list_top = guard_list;
             setup_signal_handler();
@@ -201,8 +211,7 @@ static void check_queued_tags(void) {
         queue_force_fault = fault;
         for (unsigned depth = 0; depth < MAX_CHECKPOINTS; ++depth) {
             checkpoint_cnt = depth;
-            max_checkpoints = MAX_CHECKPOINTS;
-            branch_counter = 0;
+            checkpoint_test_reset_site();
             memory_history_top = memory_history;
             guard_list_top = guard_list;
             for (unsigned i = 0; i < DIFT_REG_TAGS_SIZE; ++i) {
@@ -306,8 +315,7 @@ static void check_coverage(void) {
             coverage_step = coverage_event_count = 0;
             coverage_word = 0x5555;
             checkpoint_cnt = 0;
-            max_checkpoints = MAX_CHECKPOINTS;
-            branch_counter = 0;
+            checkpoint_test_reset_site();
             memory_history_top = memory_history;
             guard_list_top = guard_list;
             assert(checkpoint_rollback_probe(stack_top) == 1);
@@ -585,59 +593,35 @@ static void check_storage(void) {
     scratchpad[SCRATCHPAD_SIZE - 1] = 1;
 }
 
-static unsigned expected_limit(uint32_t count) {
-#ifdef ENABLE_NESTED_SPECULATION
-    if (count <= BRANCH_FULL_EXEC_COUNT)
-        return MAX_CHECKPOINTS;
-    unsigned trailing_zeros = 0;
-    while (!(count & 1)) {
-        count >>= 1;
-        trailing_zeros++;
-    }
-    unsigned limit = trailing_zeros / 2 + 1;
-    return limit < MAX_CHECKPOINTS ? limit : MAX_CHECKPOINTS;
-#else
-    (void)count;
-    return 1;
-#endif
-}
-
 static void check_capacity(void) {
-    const uint32_t counts[] = {
-        1, 5, 6, 8, 16, 64, 1024, UINT32_C(0x80000001), 4096, 16384,
-        UINT32_C(0x80000000), UINT32_MAX, 0,
-    };
-    for (size_t i = 0; i < sizeof(counts) / sizeof(counts[0]); i++) {
-        unsigned limit = expected_limit(counts[i]);
-        branch_counter = counts[i] - 1;
-        checkpoint_cnt = 0;
-        max_checkpoints = 0;
-        assert(checkpoint_entry_probe(stack_top) == 1);
-        if (max_checkpoints != limit) {
-            fprintf(stderr, "count=%" PRIu32 " limit=%" PRIu64 " expected=%u\n",
-                    counts[i], max_checkpoints, limit);
-            abort();
-        }
-        assert(checkpoint_cnt == 1);
+    checkpoint_test_reset_site();
+#ifndef ENABLE_HASHED_NESTED
+    branch_site = UINT32_MAX;
+    max_checkpoints = 0;  /* The single-level root initializes the limit. */
+#endif
+    checkpoint_cnt = 0;
+    assert(checkpoint_entry_probe(stack_top) == 1);
+    assert(checkpoint_cnt == 1 && max_checkpoints == MAX_CHECKPOINTS);
 #if defined(__aarch64__)
-        assert(checkpoint_metadata[0].registers.x16 == 0x1640);
-        assert(checkpoint_metadata[0].registers.x17 == 0x1740);
+    assert(checkpoint_metadata[0].registers.x16 == 0x1640);
+    assert(checkpoint_metadata[0].registers.x17 == 0x1740);
 #endif
-#ifdef USE_BRANCH_EXEC_COUNT
-        assert(branch_counter == counts[i]);
-#endif
-        uint32_t saved_counter = branch_counter;
-        for (unsigned depth = 1; depth < limit; depth++) {
-            assert(checkpoint_entry_probe(stack_top) == 1);
-            assert(checkpoint_cnt == depth + 1);
-            assert(branch_counter == saved_counter);
-        }
-        checkpoint_metadata_t saved[MAX_CHECKPOINTS];
-        memcpy(saved, checkpoint_metadata, sizeof(saved));
-        assert(checkpoint_entry_probe(stack_top) == 0);
-        assert(checkpoint_cnt == limit);
-        assert(memcmp(saved, checkpoint_metadata, sizeof(saved)) == 0);
+#ifdef ENABLE_HASHED_NESTED
+    assert(branch_site.arch[0] == 1 && branch_site.arch[1] == 0);
+    for (unsigned depth = 1; depth < MAX_CHECKPOINTS; ++depth) {
+        /* Start each depth probe with a fresh transient branch history. */
+        branch_site.tree[0] = 0;
+        assert(checkpoint_entry_probe(stack_top) == 1);
+        assert(checkpoint_cnt == depth + 1 && branch_site.arch[0] == 1);
     }
+#else
+    assert(branch_site == UINT32_MAX);
+#endif
+    checkpoint_metadata_t saved[MAX_CHECKPOINTS];
+    memcpy(saved, checkpoint_metadata, sizeof(saved));
+    assert(checkpoint_entry_probe(stack_top) == 0);
+    assert(checkpoint_cnt == MAX_CHECKPOINTS);
+    assert(memcmp(saved, checkpoint_metadata, sizeof(saved)) == 0);
     libcheckpoint_enabled = false;
     checkpoint_cnt = 0;
     assert(checkpoint_entry_probe(stack_top) == 0);
@@ -659,9 +643,8 @@ static void check_timing(void) {
 #endif
             memset(&simulation_statistics, 0, sizeof(simulation_statistics));
             last_rdtsc = 0;
-            branch_counter = 0;
+            checkpoint_test_reset_site();
             checkpoint_cnt = depth;
-            max_checkpoints = MAX_CHECKPOINTS;
             assert(checkpoint_entry_probe(stack_top) == 1);
             if ((simulation_statistics.rdtsc_runtime.normal_time != 0) != (depth == 0) ||
                     (simulation_statistics.rdtsc_runtime.spec_time != 0) != (depth != 0)) {
@@ -696,7 +679,7 @@ int main(int argc, char **argv) {
     assert(mapping != MAP_FAILED);
     stack_top = (char *)mapping + stack_size - 4096;
 #endif
-    checkpoint_target_metadata[CHECKPOINT_TARGET_BRANCH_COUNTER_ADDR / 8] = (uintptr_t)&branch_counter;
+    checkpoint_target_metadata[CHECKPOINT_TARGET_BRANCH_COUNTER_ADDR / 8] = (uintptr_t)&branch_site;
     checkpoint_target_metadata[CHECKPOINT_TARGET_FIXED_REG0_SOURCE / 8] = UINTPTR_MAX;
     checkpoint_target_metadata[CHECKPOINT_TARGET_FIXED_REG1_SOURCE / 8] = UINTPTR_MAX;
     libcheckpoint_enabled = true;

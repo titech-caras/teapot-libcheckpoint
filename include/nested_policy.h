@@ -17,7 +17,7 @@ extern uint32_t teapot_nested_root_gen;
 extern uint64_t teapot_nested_seed_word;
 void teapot_nested_seed_init(int argc, char **argv);
 
-/* Keep these hooks on their existing checkpoint.c lines: paper builds retain
+/* Keep these hooks on their existing checkpoint.c lines: single-level builds retain
  * their object bytes without overriding real diagnostic line numbers. */
 #define TEAPOT_NESTED_CAPABILITY_NAME "hashed_nested",
 #define TEAPOT_NESTED_POLICY_CHECK(record, runtime) do { \

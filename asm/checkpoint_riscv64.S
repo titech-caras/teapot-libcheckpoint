@@ -361,51 +361,9 @@ make_checkpoint_riscv64:
 	ld	t2, 0(t0)
 	bnez	t2, .Lif_should_checkpoint
 
-#ifdef USE_BRANCH_EXEC_COUNT
-	LOAD_ADDR_OFFSET t0, checkpoint_target_metadata, CHECKPOINT_TARGET_BRANCH_COUNTER_ADDR
-	ld	t0, 0(t0)
-	lw	t3, 0(t0)
-	addiw	t3, t3, 1
-	sw	t3, 0(t0)
-#endif
-
-#ifdef BRANCH_FULL_EXEC_COUNT
-	li	t4, BRANCH_FULL_EXEC_COUNT
-	bgtu	t3, t4, .Lheuristic
-	LOAD_ADDR t0, max_checkpoints
-	li	t1, MAX_CHECKPOINTS
-	sd	t1, 0(t0)
-	j	.Lif_should_checkpoint
-#endif
-
-.Lheuristic:
-#ifdef SPECFUZZ_PRIORITIZED_SIMULATION
-	mv	t4, t3
-	/* Match the defined zero-input result of x64 TZCNT / AArch64 CLZ.
-	 * A wrapping counter can be zero without BRANCH_FULL_EXEC_COUNT. */
-	li	t5, 64
-	beqz	t4, .Lctz_done
-	li	t5, 0
-.Lctz_loop:
-	andi	t6, t4, 1
-	bnez	t6, .Lctz_done
-	addi	t5, t5, 1
-	srli	t4, t4, 1
-	j	.Lctz_loop
-.Lctz_done:
-	srli	t5, t5, 1
-	addi	t5, t5, 1
-	li	t1, MAX_CHECKPOINTS
-	bleu	t5, t1, .Ldepth_limit_ready
-	mv	t5, t1
-.Ldepth_limit_ready:
-	LOAD_ADDR t0, max_checkpoints
-	sd	t5, 0(t0)
-#else
 	LOAD_ADDR t0, max_checkpoints
 	li	t1, 1
 	sd	t1, 0(t0)
-#endif
 
 .Lif_should_checkpoint:
 	LOAD_ADDR t0, max_checkpoints

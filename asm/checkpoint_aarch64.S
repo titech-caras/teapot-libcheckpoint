@@ -343,39 +343,9 @@ make_checkpoint_aarch64:
 	ldr	x0, [x16]
 	cbnz	x0, .Lif_should_checkpoint
 
-#ifdef USE_BRANCH_EXEC_COUNT
-	LOAD_ADDR x16, checkpoint_target_metadata + CHECKPOINT_TARGET_BRANCH_COUNTER_ADDR
-	ldr	x16, [x16]
-	ldr	w1, [x16]
-	add	w1, w1, #1
-	str	w1, [x16]
-#endif
-
-#ifdef BRANCH_FULL_EXEC_COUNT
-	cmp	x1, #BRANCH_FULL_EXEC_COUNT
-	b.gt	.Lheuristic
-	LOAD_ADDR x16, max_checkpoints
-	mov	x17, #MAX_CHECKPOINTS
-	str	x17, [x16]
-	b	.Lif_should_checkpoint
-#endif
-
-.Lheuristic:
-#ifdef SPECFUZZ_PRIORITIZED_SIMULATION
-	rbit	x1, x1
-	clz	x1, x1
-	lsr	x1, x1, #1
-	add	x1, x1, #1
-	mov	x17, #MAX_CHECKPOINTS
-	cmp	x1, x17
-	csel	x1, x1, x17, ls
-	LOAD_ADDR x16, max_checkpoints
-	str	x1, [x16]
-#else
 	LOAD_ADDR x16, max_checkpoints
 	mov	x17, #1
 	str	x17, [x16]
-#endif
 
 .Lif_should_checkpoint:
 	LOAD_ADDR x16, max_checkpoints

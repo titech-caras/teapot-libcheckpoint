@@ -200,7 +200,7 @@ function(_libcheckpoint_contract_probe_source out)
 #else
 #define LCK_TIME 0
 #endif
-#ifdef USE_BRANCH_EXEC_COUNT
+#ifdef ENABLE_HASHED_NESTED
 #define LCK_BRANCH_EXEC_COUNT 1
 #else
 #define LCK_BRANCH_EXEC_COUNT 0
@@ -328,7 +328,6 @@ if(NOT CHECKPOINT_ARCH_NAME STREQUAL "aarch64")
 endif()
 
 _libcheckpoint_contract_probe(default _contract_default)
-_libcheckpoint_contract_probe(nested _contract_nested ENABLE_NESTED_SPECULATION)
 _libcheckpoint_contract_probe(hashed _contract_hashed ENABLE_NESTED_SPECULATION ENABLE_HASHED_NESTED)
 
 # The ABI section, flat and sorted. The fingerprint hashes KEY=VALUE lines.
@@ -347,7 +346,7 @@ foreach(field IN LISTS _contract_abi)
     string(REPLACE "|" ";" parts "${field}")
     list(GET parts 0 key)
     list(APPEND _abi_keys "${key}")
-    if(NOT "${_contract_default_${key}}" STREQUAL "${_contract_nested_${key}}")
+    if(NOT "${_contract_default_${key}}" STREQUAL "${_contract_hashed_${key}}")
         message(FATAL_ERROR "The nested runtime changes the contract ABI field ${key}")
     endif()
 endforeach()

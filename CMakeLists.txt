@@ -62,7 +62,7 @@ if(BUILD_TESTING)
     # definitions are runtime-owned as well. Never omit this coverage gate just
     # because the capture tool or manifest is unavailable.
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
-    foreach(runtime_archive IN ITEMS checkpoint checkpoint_nested checkpoint_nested_hashed)
+    foreach(runtime_archive IN ITEMS checkpoint checkpoint_nested_hashed)
         if(TARGET ${runtime_archive})
             add_test(NAME ${runtime_archive}_riscv_profile_contract
                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/riscv_profile_contract.py"
@@ -73,7 +73,7 @@ if(BUILD_TESTING)
     if(NOT CMAKE_NM)
         message(FATAL_ERROR "CMAKE_NM is required for runtime export coverage")
     endif()
-    foreach(archive IN ITEMS checkpoint checkpoint_nested checkpoint_nested_hashed checkpoint_dift_zlib_wrappers)
+    foreach(archive IN ITEMS checkpoint checkpoint_nested_hashed checkpoint_dift_zlib_wrappers)
         if(TARGET ${archive})
             add_test(NAME ${archive}_reserved_exports
                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/runtime_exports.py"
@@ -130,7 +130,7 @@ if(BUILD_TESTING)
     # extern declaration for assembly-local NOBITS storage can introduce a
     # broken A64 GOT reference without any startup test exercising it.
     if(TEAPOT_ENABLE_FAULT_TRAINING)
-        foreach(runtime IN ITEMS checkpoint checkpoint_nested)
+        foreach(runtime IN ITEMS checkpoint checkpoint_nested_hashed)
             if(NOT TARGET ${runtime})
                 continue()
             endif()
@@ -172,7 +172,7 @@ if(BUILD_TESTING)
     add_test(NAME checkpoint_optional_zlib_required
         COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/optional_zlib_required.cmake")
     if(CMAKE_NM)
-        foreach(archive IN ITEMS checkpoint checkpoint_nested checkpoint_nested_hashed checkpoint_dift_zlib_wrappers)
+        foreach(archive IN ITEMS checkpoint checkpoint_nested_hashed checkpoint_dift_zlib_wrappers)
             if(NOT TARGET ${archive})
                 continue()
             endif()
@@ -237,12 +237,9 @@ if(BUILD_TESTING)
     endif()
     teapot_add_contract_test(fault_unrequired_table "table/capability disagreement"
         DEFINITIONS TEST_CONTRACT_FAULT_TABLE SOURCES tests/fault_sites.S)
-    teapot_add_contract_test(nested_accepted "contract accepted" ACCEPTED
-        DEFINITIONS ENABLE_NESTED_SPECULATION
-            TEST_CONTRACT_REQUIRED=LIBCHECKPOINT_CAPABILITY_NESTED)
-    teapot_add_contract_test(hashed_on_paper "capabilities this archive lacks"
-        DEFINITIONS ENABLE_NESTED_SPECULATION TEST_CONTRACT_REQUIRED=LIBCHECKPOINT_CAPABILITY_HASHED_NESTED)
-    teapot_add_contract_test(paper_on_hashed "nested policy mismatch"
+    teapot_add_contract_test(hashed_on_default "capabilities this archive lacks"
+        DEFINITIONS TEST_CONTRACT_REQUIRED=LIBCHECKPOINT_CAPABILITY_HASHED_NESTED)
+    teapot_add_contract_test(default_on_hashed "nested policy mismatch"
         DEFINITIONS ENABLE_NESTED_SPECULATION ENABLE_HASHED_NESTED
         SOURCES src/nested_policy.c)
     teapot_add_contract_test(hashed_accepted "contract accepted" ACCEPTED
@@ -279,7 +276,7 @@ if(BUILD_TESTING)
         SOURCES tests/contract_mixed_alignment.c)
     # Each manifest states the coverage mode the build was configured with, in
     # the fingerprinted ABI and as the capability.
-    foreach(archive IN ITEMS checkpoint checkpoint_nested checkpoint_nested_hashed)
+    foreach(archive IN ITEMS checkpoint checkpoint_nested_hashed)
         if(TARGET ${archive})
             add_test(NAME ${archive}_contract_coverage_mode
                 COMMAND "${CMAKE_COMMAND}" "-DMANIFEST=${CMAKE_CURRENT_BINARY_DIR}/lib${archive}.contract.json"
@@ -335,27 +332,6 @@ if(BUILD_TESTING)
             set_tests_properties(checkpoint_protected_object_${check} PROPERTIES WILL_FAIL TRUE)
         endif()
     endforeach()
-
-    if(CHECKPOINT_ARCH_NAME STREQUAL "riscv64")
-        # This supported configuration has prioritized depth but no initial
-        # full-depth burst. In particular it must handle counter wrap to zero.
-        add_executable(checkpoint_entry_priority_test
-            tests/checkpoint_entry.c tests/checkpoint_entry.S tests/contract_module_record.c
-            tests/coverage_provider.c ${CHECKPOINT_RUNTIME_SOURCES})
-        teapot_configure_checkpoint_target(checkpoint_entry_priority_test)
-        target_compile_definitions(checkpoint_entry_priority_test PRIVATE
-            SPECFUZZ_PRIORITIZED_SIMULATION TIME COVERAGE_PROVIDER_WITHOUT_GUARD)
-        target_compile_options(checkpoint_entry_priority_test PRIVATE -fno-pie)
-        target_link_options(checkpoint_entry_priority_test PRIVATE -no-pie -Wl,--no-relax)
-        if(TEAPOT_RISCV_PROFILE STREQUAL "lp64-pure")
-            target_sources(checkpoint_entry_priority_test PRIVATE tests/riscv_pure_illegal.S)
-            target_link_options(checkpoint_entry_priority_test PRIVATE
-                -Wl,--wrap=restore_checkpoint -Wl,--wrap=sigaction)
-        endif()
-        add_test(NAME checkpoint_entry_priority_capacity
-            COMMAND checkpoint_entry_priority_test capacity)
-        set_tests_properties(checkpoint_entry_priority_capacity PROPERTIES TIMEOUT 10)
-    endif()
 
     function(teapot_check_asan_test_link)
         # Some cross toolchains make try_compile build only an archive. These
@@ -533,6 +509,7 @@ if(BUILD_TESTING)
         if(mode STREQUAL "nested")
             # Exercise protected-section boundaries in both object link orders.
             list(REVERSE entry_runtime_sources)
+            list(APPEND entry_runtime_sources src/nested_policy.c)
         endif()
         add_executable(${entry_test}
             tests/checkpoint_entry.c tests/checkpoint_entry.S tests/contract_module_record.c
@@ -550,7 +527,8 @@ if(BUILD_TESTING)
             set_tests_properties(checkpoint_entry_${mode}_df PROPERTIES TIMEOUT 10)
         endif()
         if(mode STREQUAL "nested")
-            target_compile_definitions(${entry_test} PRIVATE ENABLE_NESTED_SPECULATION)
+            target_compile_definitions(${entry_test} PRIVATE ENABLE_NESTED_SPECULATION ENABLE_HASHED_NESTED
+                TEST_CONTRACT_REQUIRED=LIBCHECKPOINT_CAPABILITY_HASHED_NESTED)
         endif()
         target_compile_options(${entry_test} PRIVATE -fno-pie)
         target_link_options(${entry_test} PRIVATE -no-pie)
@@ -650,7 +628,6 @@ if(BUILD_TESTING AND TARGET checkpoint_nested_hashed)
     endif()
     if(TEAPOT_ENABLE_COVERAGE)
         target_sources(checkpoint_nested_policy_test PRIVATE tests/coverage_provider.c)
-        target_compile_definitions(checkpoint_nested_policy_test PRIVATE COVERAGE_PROVIDER_WITHOUT_GUARD)
     endif()
     target_link_libraries(checkpoint_nested_policy_test PRIVATE checkpoint_nested_hashed)
     add_test(NAME checkpoint_nested_policy COMMAND checkpoint_nested_policy_test)
@@ -676,9 +653,10 @@ if(BUILD_TESTING AND CHECKPOINT_ARCH_NAME STREQUAL "x64")
 
     add_executable(checkpoint_x64_vector_cases_test
         tests/checkpoint_x64_vector_cases.c tests/checkpoint_x64_vector_cases.S
-        tests/contract_module_record.c tests/coverage_provider.c ${CHECKPOINT_RUNTIME_SOURCES})
+        tests/contract_module_record.c tests/coverage_provider.c ${CHECKPOINT_RUNTIME_SOURCES} src/nested_policy.c)
     teapot_configure_checkpoint_target(checkpoint_x64_vector_cases_test)
     target_compile_definitions(checkpoint_x64_vector_cases_test PRIVATE COVERAGE ENABLE_NESTED_SPECULATION
+        ENABLE_HASHED_NESTED TEST_CONTRACT_REQUIRED=LIBCHECKPOINT_CAPABILITY_HASHED_NESTED
         COVERAGE_PROVIDER_WITHOUT_TRACE_PC)
     target_compile_options(checkpoint_x64_vector_cases_test PRIVATE -fno-pie)
     target_link_options(checkpoint_x64_vector_cases_test PRIVATE -no-pie)

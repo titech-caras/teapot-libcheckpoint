@@ -99,12 +99,6 @@ install(TARGETS checkpoint ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 libcheckpoint_write_contract_manifest(checkpoint _contract_default)
 
 if(TEAPOT_BUILD_NESTED_RUNTIME)
-    add_library(checkpoint_nested ${CHECKPOINT_RUNTIME_SOURCES})
-    teapot_configure_checkpoint_target(checkpoint_nested)
-    target_compile_definitions(checkpoint_nested PRIVATE ENABLE_NESTED_SPECULATION)
-    install(TARGETS checkpoint_nested ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
-    libcheckpoint_write_contract_manifest(checkpoint_nested _contract_nested)
-
     add_library(checkpoint_nested_hashed ${CHECKPOINT_RUNTIME_SOURCES} src/nested_policy.c)
     teapot_configure_checkpoint_target(checkpoint_nested_hashed)
     target_compile_definitions(checkpoint_nested_hashed PRIVATE ENABLE_NESTED_SPECULATION ENABLE_HASHED_NESTED)

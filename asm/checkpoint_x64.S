@@ -327,32 +327,7 @@ DEF_REPORT_GADGET_X64_PRESERVE TARGET
 	testq	%rax, %rax
 	jnz	.Lif_should_checkpoint\@
 
-#ifdef USE_BRANCH_EXEC_COUNT
-	movq	checkpoint_target_metadata+16, %rbx
-	incl	(%rbx)
-	movl	(%rbx), %ebx
-#endif
-
-#ifdef BRANCH_FULL_EXEC_COUNT
-	cmpq	$BRANCH_FULL_EXEC_COUNT, %rbx
-	jg	.Lheuristic\@
-	movq	$MAX_CHECKPOINTS, max_checkpoints
-	jmp	.Lif_should_checkpoint\@
-#endif
-
-.Lheuristic\@:
-#ifdef SPECFUZZ_PRIORITIZED_SIMULATION
-	tzcntq	%rbx, %rbx
-	shrq	$1, %rbx
-	incq	%rbx
-	cmpq	$MAX_CHECKPOINTS, %rbx
-	jbe	.Ldepth_limit_ready\@
-	movq	$MAX_CHECKPOINTS, %rbx
-.Ldepth_limit_ready\@:
-	movq	%rbx, max_checkpoints
-#else
 	movq	$1, max_checkpoints
-#endif
 
 .Lif_should_checkpoint\@:
 	cmpq	max_checkpoints, %rax

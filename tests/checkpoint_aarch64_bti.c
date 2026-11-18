@@ -29,7 +29,7 @@
 extern int checkpoint_bti_probe(void *stack_top, void *target);
 extern memory_history_t *memory_history_top;
 extern uint32_t *guard_list_top;
-extern uint64_t max_checkpoints;
+extern void checkpoint_test_reset_site(void);
 static uint64_t test_memory;
 static void *fault_target;
 static unsigned expected_bti_reason = ROLLBACK_SIGSEGV;
@@ -111,6 +111,7 @@ static void check_live_chain(void *stack_top) {
     observed_action.sa_sigaction = observe_chain_bti;
     assert(sigaction(SIGILL, &observed_action, NULL) == 0);
 
+    checkpoint_test_reset_site();
     assert(checkpoint_bti_nested_probe(stack_top, fault_target) == 42);
     assert(checkpoint_cnt == 0 && instruction_cnt == 17);
     assert(test_memory == UINT64_C(0x123456789abcdef));
@@ -232,6 +233,7 @@ static int check_aarch64_bti(void *stack_top, bool live_chain) {
         memory_history_t *saved_history = memory_history_top;
         uint32_t *saved_guards = guard_list_top;
         uint64_t saved_rollbacks = simulation_statistics.rollback_reason[expected_bti_reason];
+        checkpoint_test_reset_site();
         assert(checkpoint_bti_probe(stack_top, fault_target) == 42);
         assert(checkpoint_cnt == depth);
         assert(instruction_cnt == 17 + depth);
@@ -255,6 +257,7 @@ static int check_aarch64_bti(void *stack_top, bool live_chain) {
             uint32_t *saved_guards = guard_list_top;
             uint64_t saved_rollbacks = simulation_statistics.rollback_reason[expected_bti_reason];
             uint64_t saved_bti_rollbacks = teapot_bti_rollbacks;
+            checkpoint_test_reset_site();
             assert(checkpoint_bti_probe(stack_top, __teapot_bti_transient_start + 4) == 42);
             assert(memory_history_top == saved_history && guard_list_top == saved_guards);
             assert(simulation_statistics.rollback_reason[expected_bti_reason] == saved_rollbacks + 1);
@@ -359,9 +362,7 @@ int check_aarch64_bti_traps(void *stack_top) {
     for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++)
     for (unsigned depth = 0; depth < depths; depth++) {
         checkpoint_cnt = depth;
-        // Repeated depth-zero calls can lower the next nested capacity through
-        // the scheduling heuristic. Explicitly exercise each requested depth.
-        max_checkpoints = MAX_CHECKPOINTS;
+        checkpoint_test_reset_site();
         instruction_cnt = 17 + depth;
         test_memory = UINT64_C(0x123456789abcdef);
         for (size_t j = 0; j < DIFT_REG_TAGS_SIZE; j++) dift_reg_tags[j] = (uint8_t)(j + 1);

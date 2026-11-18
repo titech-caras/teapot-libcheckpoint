@@ -2,10 +2,12 @@
 #include <cpuid.h>
 #include <stdint.h>
 #include "checkpoint.h"
+#include "nested_policy.h"
 
 extern void checkpoint_x64_vector_cases_probe(unsigned outer, int inner, unsigned df);
 extern uintptr_t checkpoint_target_metadata[];
-static uint32_t branch_count;
+extern uint64_t max_checkpoints;
+static struct teapot_nested_site branch_site;
 uint64_t vector_observed[8];
 uint32_t __guard_start__teapot__[1], __guard_end__teapot__[1];
 
@@ -44,8 +46,9 @@ int main(void) {
                     unsigned saved_inner = TEAPOT_X64_VECTOR_MODE == 1 ? 1 :
                         TEAPOT_X64_VECTOR_MODE > 1 ? 2 : (unsigned)inner;
                     checkpoint_target_metadata[CHECKPOINT_TARGET_BRANCH_COUNTER_ADDR / 8] =
-                        (uintptr_t)&branch_count;
-                    branch_count = 0;
+                        (uintptr_t)&branch_site;
+                    branch_site = (struct teapot_nested_site){0};
+                    max_checkpoints = MAX_CHECKPOINTS;
                     checkpoint_x64_vector_cases_probe(outer, inner, df);
                     assert(checkpoint_cnt == 0);
                     if (saved_outer != 0) assert(vector_observed[0] == 10);

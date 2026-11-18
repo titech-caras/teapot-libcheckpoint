@@ -3,7 +3,7 @@
 This repository contains the Teapot runtime library.  It builds x86-64,
 AArch64, and RV64 variants.
 
-`TEAPOT_BUILD_NESTED_RUNTIME=ON` also builds `checkpoint_nested_hashed`, the opt-in runtime for Teapot's `--enable-nested-speculation --nested-policy hashed`; the paper runtime remains unchanged. Its seed hashes the bytes of `argv[1]` through a separate raw-syscall open, or uses `TEAPOT_NESTED_SEED=<hex u64>` directly, and is printed with `VERBOSE` statistics. Use its matching contract JSON: paper and hashed binaries cannot exchange runtimes.
+`TEAPOT_BUILD_NESTED_RUNTIME=ON` also builds `checkpoint_nested_hashed` for Teapot's `--enable-nested-speculation`. Use its matching contract JSON. The runtime hashes the bytes of the file named by `argv[1]` through a separate raw-syscall open. Set `TEAPOT_NESTED_SEED=<hex u64>` to supply the seed directly. `VERBOSE` statistics print the seed.
 
 Hashed-mode automatic seeding reads only regular files; non-regular inputs use the no-input seed, so use `TEAPOT_NESTED_SEED` for streams.
 A speculative application store that aliases the hashed site records can corrupt or rewind their tree/generation state; this inherited runtime-state aliasing limitation is accepted.
@@ -72,7 +72,7 @@ These static checks do not guarantee a particular loader placement is supported;
 startup still rejects reservations that collide with existing mappings.
 
 The default `checkpoint` target fixes the runtime depth to one checkpoint.  Pass
-`-DTEAPOT_BUILD_NESTED_RUNTIME=ON` to also build the `checkpoint_nested` target,
+`-DTEAPOT_BUILD_NESTED_RUNTIME=ON` to also build the `checkpoint_nested_hashed` target,
 then link that target with Teapot output produced with
 `--enable-nested-speculation`.
 The nested branch-count heuristic is capped at `MAX_CHECKPOINTS`.
@@ -80,7 +80,7 @@ The nested branch-count heuristic is capped at `MAX_CHECKPOINTS`.
 ## Runtime contract
 
 Configuring writes `libcheckpoint.contract.json` (and
-`libcheckpoint_nested.contract.json`) next to each archive, and `cmake --install`
+`libcheckpoint_nested_hashed.contract.json`) next to each archive, and `cmake --install`
 installs them beside the archives. Each holds:
 
 - `abi`: every layout fact that Teapot's emitted code and the runtime share,

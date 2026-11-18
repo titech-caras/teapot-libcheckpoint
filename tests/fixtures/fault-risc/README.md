@@ -18,7 +18,7 @@ intentionally and pass the runtime tests.
 
 CMake builds these checked-in files without requiring Teapot or a printer at
 runtime-library build time. Publishing-enabled RISC CTest lanes run execution
-ON/OFF, A64's manual-policy PAC/BTI variant in the configured BTI lane and, when checkpoint_nested is built,
+ON/OFF, A64's manual-policy PAC/BTI variant in the configured BTI lane and, when checkpoint_nested_hashed is built,
 eight real rollback combinations with exact ON/OFF output comparison. The QEMU
 A64 rollback fixture uses its retained 16-MiB guest stack argument. These tests
 do not establish native cache/migration, full backend BTI activation or full ASan.
