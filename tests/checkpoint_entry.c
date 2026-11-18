@@ -422,12 +422,14 @@ static void check_memlog_validation(void) {
         memory_history[0] = (memory_history_t){.addr = target + 1, .data = 0, .size = 0};  /* corrupt */
         memory_history[1] = (memory_history_t){.addr = target, .data = UINT64_MAX, .size = 8};
         memory_history_top = memory_history + 2;
+        setup_signal_handler();
+        stderr = NULL;
         restore_checkpoint_memlog();
         _exit(0);  /* must not be reached */
     }
     int status;
     assert(waitpid(child, &status, 0) == child);
-    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+    assert(WIFEXITED(status) && WEXITSTATUS(status) == EXIT_FAILURE);
     assert(target[0] == UINT64_C(0x5555555555555555));
     assert(munmap(target, 4096) == 0);
 }
